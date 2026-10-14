@@ -6,6 +6,7 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
+const multer = require('multer');
 const { DatabaseSync } = require('node:sqlite');
 
 const app = express();
@@ -15,144 +16,180 @@ const MOON_VALUE_RWF = 10;
 const MIN_WITHDRAWAL_MOON = 1000;
 const STREAM_REWARD_MOON = 0.1;
 const STREAM_DURATION_MS = 30000;
-const ADMIN_EMAIL = String(process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+
+const ADMIN_EMAIL = String(process.env.ADMIN_EMAIL || '')
+  .trim()
+  .toLowerCase();
+
 const ADMIN_PASSWORD = String(process.env.ADMIN_PASSWORD || '');
 const SESSION_SECRET = String(process.env.SESSION_SECRET || '');
-const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
+
+const DATA_DIR =
+  process.env.DATA_DIR || path.join(__dirname, 'data');
+
+const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
 
 if (SESSION_SECRET.length < 32) {
-  console.error('ERROR: Set SESSION_SECRET to a random string of at least 32 characters.');
+  console.error(
+    'ERROR: Set SESSION_SECRET to a random string of at least 32 characters.'
+  );
   process.exit(1);
 }
+
 if (!ADMIN_EMAIL || !ADMIN_PASSWORD) {
-  console.error('ERROR: Set ADMIN_EMAIL and ADMIN_PASSWORD in Render environment variables.');
+  console.error(
+    'ERROR: Set ADMIN_EMAIL and ADMIN_PASSWORD in Render environment variables.'
+  );
   process.exit(1);
 }
+
 if (ADMIN_PASSWORD.length < 12) {
-  console.error('ERROR: ADMIN_PASSWORD must contain at least 12 characters.');
+  console.error(
+    'ERROR: ADMIN_PASSWORD must contain at least 12 characters.'
+  );
   process.exit(1);
 }
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
-const db = new DatabaseSync(path.join(DATA_DIR, 'moonet.db'));
+fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+
+const db = new DatabaseSync(
+  path.join(DATA_DIR, 'moonet.db')
+);
 
 db.exec(`
  PRAGMA foreign_keys=ON;
  PRAGMA busy_timeout=5000;
 
  CREATE TABLE IF NOT EXISTS users(
-   id INTEGER PRIMARY KEY AUTOINCREMENT,
-   name TEXT NOT NULL,
-   email TEXT NOT NULL UNIQUE,
-   password_hash TEXT NOT NULL,
-   moon INTEGER NOT NULL DEFAULT 0 CHECK(moon>=0),
-   referral_code TEXT NOT NULL UNIQUE,
-   referred_by INTEGER REFERENCES users(id),
-   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-   suspended INTEGER NOT NULL DEFAULT 0
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  email TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  moon INTEGER NOT NULL DEFAULT 0 CHECK(moon>=0),
+  referral_code TEXT NOT NULL UNIQUE,
+  referred_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  suspended INTEGER NOT NULL DEFAULT 0
  );
 
  CREATE TABLE IF NOT EXISTS transactions(
-   id INTEGER PRIMARY KEY AUTOINCREMENT,
-   user_id INTEGER NOT NULL REFERENCES users(id),
-   type TEXT NOT NULL,
-   moon INTEGER NOT NULL,
-   description TEXT NOT NULL,
-   reference TEXT UNIQUE,
-   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  type TEXT NOT NULL,
+  moon INTEGER NOT NULL,
+  description TEXT NOT NULL,
+  reference TEXT UNIQUE,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
  );
 
  CREATE TABLE IF NOT EXISTS withdrawals(
-   id INTEGER PRIMARY KEY AUTOINCREMENT,
-   user_id INTEGER NOT NULL REFERENCES users(id),
-   moon INTEGER NOT NULL CHECK(moon>0),
-   amount_rwf INTEGER NOT NULL CHECK(amount_rwf>0),
-   payment_method TEXT NOT NULL,
-   payment_account TEXT NOT NULL,
-   status TEXT NOT NULL DEFAULT 'pending',
-   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  moon INTEGER NOT NULL CHECK(moon>0),
+  amount_rwf INTEGER NOT NULL CHECK(amount_rwf>0),
+  payment_method TEXT NOT NULL,
+  payment_account TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
  );
 
  CREATE TABLE IF NOT EXISTS revenue(
-   id INTEGER PRIMARY KEY AUTOINCREMENT,
-   amount_rwf INTEGER NOT NULL CHECK(amount_rwf>=0),
-   source TEXT NOT NULL,
-   reference TEXT UNIQUE,
-   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  amount_rwf INTEGER NOT NULL CHECK(amount_rwf>=0),
+  source TEXT NOT NULL,
+  reference TEXT UNIQUE,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
  );
 
  CREATE TABLE IF NOT EXISTS expenses(
-   id INTEGER PRIMARY KEY AUTOINCREMENT,
-   amount_rwf INTEGER NOT NULL CHECK(amount_rwf>=0),
-   description TEXT NOT NULL,
-   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  amount_rwf INTEGER NOT NULL CHECK(amount_rwf>=0),
+  description TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
  );
 
  CREATE TABLE IF NOT EXISTS settings(
-   key TEXT PRIMARY KEY,
-   value TEXT NOT NULL
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
  );
 
  CREATE TABLE IF NOT EXISTS videos(
-   id INTEGER PRIMARY KEY AUTOINCREMENT,
-   user_id INTEGER NOT NULL REFERENCES users(id),
-   title TEXT NOT NULL,
-   video_url TEXT NOT NULL,
-   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  title TEXT NOT NULL,
+  video_url TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
  );
 
  CREATE TABLE IF NOT EXISTS video_streams(
-   id INTEGER PRIMARY KEY AUTOINCREMENT,
-   video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
-   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-   stream_date TEXT NOT NULL,
-   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-   UNIQUE(video_id,user_id,stream_date)
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  stream_date TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(video_id,user_id,stream_date)
  );
 
  CREATE TABLE IF NOT EXISTS video_likes(
-   id INTEGER PRIMARY KEY AUTOINCREMENT,
-   video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
-   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-   UNIQUE(video_id,user_id)
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(video_id,user_id)
  );
 
  CREATE TABLE IF NOT EXISTS video_comments(
-   id INTEGER PRIMARY KEY AUTOINCREMENT,
-   video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
-   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-   comment TEXT NOT NULL,
-   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  comment TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
  );
 
  CREATE TABLE IF NOT EXISTS follows(
-   id INTEGER PRIMARY KEY AUTOINCREMENT,
-   follower_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-   following_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-   UNIQUE(follower_id,following_id),
-   CHECK(follower_id<>following_id)
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  follower_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  following_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(follower_id,following_id),
+  CHECK(follower_id<>following_id)
  );
 
  CREATE TABLE IF NOT EXISTS gifts(
-   id INTEGER PRIMARY KEY AUTOINCREMENT,
-   video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
-   sender_id INTEGER NOT NULL REFERENCES users(id),
-   receiver_id INTEGER NOT NULL REFERENCES users(id),
-   gift_name TEXT NOT NULL,
-   moon INTEGER NOT NULL CHECK(moon>0),
-   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+  sender_id INTEGER NOT NULL REFERENCES users(id),
+  receiver_id INTEGER NOT NULL REFERENCES users(id),
+  gift_name TEXT NOT NULL,
+  moon INTEGER NOT NULL CHECK(moon>0),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
  );
 `);
 
-const get = (sql, ...p) => db.prepare(sql).get(...p);
-const all = (sql, ...p) => db.prepare(sql).all(...p);
-const run = (sql, ...p) => db.prepare(sql).run(...p);
+try {
+  db.exec(
+    "ALTER TABLE videos ADD COLUMN media_type TEXT NOT NULL DEFAULT 'video'"
+  );
+} catch (e) {
+  if (!String(e.message).includes('duplicate column name')) {
+    throw e;
+  }
+}
+
+const get = (sql, ...p) =>
+  db.prepare(sql).get(...p);
+
+const all = (sql, ...p) =>
+  db.prepare(sql).all(...p);
+
+const run = (sql, ...p) =>
+  db.prepare(sql).run(...p);
 
 function transaction(work) {
   return function () {
     db.exec('BEGIN IMMEDIATE');
+
     try {
       const value = work();
       db.exec('COMMIT');
@@ -161,6 +198,7 @@ function transaction(work) {
       try {
         db.exec('ROLLBACK');
       } catch (_) {}
+
       throw error;
     }
   };
@@ -173,7 +211,7 @@ function esc(v = '') {
     '>': '&gt;',
     '"': '&quot;',
     "'": '&#39;'
-  }[c]));
+  })[c]);
 }
 
 function fmt(v) {
@@ -185,152 +223,60 @@ function ref() {
 }
 
 function referralCode() {
-  return 'MOON' + crypto.randomBytes(5).toString('hex').toUpperCase();
+  return 'MOON' +
+    crypto.randomBytes(5).toString('hex').toUpperCase();
 }
 
 function csrfField(req) {
-  return `<input type="hidden" name="_csrf" value="${esc(req.session.csrfToken || '')}">`;
+  return `<input type="hidden" name="_csrf" value="${esc(
+    req.session.csrfToken || ''
+  )}">`;
 }
 
 function msg(s, cls = '') {
   return `<div class="message ${cls}">${esc(s)}</div>`;
 }
-
-function page(title, content, user = null) {
-  const nav = user
-    ? `<a href="/app">Home</a>
-       <a href="/videos">Feed</a>
-       <a href="/wallet">Wallet</a>
-       <a href="/transactions">History</a>
-       <a href="/profile">Profile</a>
-       <form action="/logout" method="post" class="inline">
-         ${csrfFieldForPage()}
-         <button class="secondary" type="submit">Logout</button>
-       </form>`
-    : `<a href="/">Home</a><a href="/login">Login</a><a href="/signup">Sign Up</a>`;
-
-  function csrfFieldForPage() {
-    return `<input type="hidden" name="_csrf" value="${esc(user && user._csrf || '')}">`;
+function page(title,content,user=null){const nav=user?`<a href="/app">Home</a><a href="/videos">Feed</a><a href="/wallet">Wallet</a><a href="/transactions">History</a><a href="/profile">Profile</a><form action="/logout" method="post" class="inline">${csrfFieldForPage()}<button class="secondary" type="submit">Logout</button></form>`:`<a href="/">Home</a><a href="/login">Login</a><a href="/signup">Sign Up</a>`;
+ function csrfFieldForPage(){return `<input type="hidden" name="_csrf" value="${esc(user && user._csrf||'')}">`;}
+ return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0b8f54"><title>${esc(title)} | MOONET</title><style>
+ :root{--green:#0b8f54;--deep:#087443;--pale:#e9f9ef;--line:#dce9e0;--ink:#183126;--muted:#63756b}*{box-sizing:border-box}body{margin:0;background:#f5faf6;color:var(--ink);font-family:Arial,sans-serif}header{position:sticky;top:0;z-index:10;background:#fff;border-bottom:1px solid var(--line);padding:13px 16px}.top{max-width:1050px;margin:auto;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.brand{font-size:25px;font-weight:800;color:var(--green);text-decoration:none}nav{display:flex;align-items:center;gap:13px;flex-wrap:wrap}a{color:var(--green);text-decoration:none}nav a{font-size:14px;font-weight:700}main{width:min(94%,900px);margin:22px auto;min-height:68vh}.hero,.card{background:#fff;border:1px solid var(--line);padding:20px;border-radius:17px;margin-bottom:16px;box-shadow:0 4px 16px #0b5b2b0a}.hero{text-align:center;padding:34px 20px}h1,h2,h3{margin-top:0}.muted{color:var(--muted);line-height:1.55}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px}.number{font-size:29px;font-weight:800;margin:10px 0;color:var(--green)}button,.button{display:inline-block;background:var(--green);color:white;border:0;border-radius:10px;padding:11px 16px;font-weight:700;cursor:pointer;font-size:14px}.secondary{background:#e8f4ec;color:var(--deep)}.danger{background:#b42318}.inline{display:inline}form.stack{display:grid;gap:12px}input,select,textarea{width:100%;padding:12px;border:1px solid #cbded0;border-radius:9px;background:#fff;color:var(--ink);font:inherit}label{display:grid;gap:7px;color:#30493a;font-weight:600}.message{padding:12px;border-radius:9px;background:var(--pale);margin-bottom:14px}.error{color:#a11}.success{color:var(--deep)}.table-wrap{overflow-x:auto}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px;border-bottom:1px solid var(--line);font-size:13px}footer{text-align:center;padding:25px;color:var(--muted)}video{width:100%;max-height:600px;background:#111;border-radius:13px}.feed-card{padding:0;overflow:hidden}.feed-head,.feed-actions,.feed-body{padding:15px}.feed-head{display:flex;justify-content:space-between;gap:10px;align-items:center}.feed-video{display:block;width:100%;max-height:70vh;aspect-ratio:9/14;object-fit:contain;background:#101010;border-radius:0}.feed-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--line)}.tiny{font-size:12px}.comment{padding:9px 0;border-bottom:1px solid #edf3ee}.pill{display:inline-block;background:var(--pale);color:var(--deep);padding:5px 9px;border-radius:20px;font-size:12px;font-weight:700}.feed-compose{border:2px dashed #b9dec6}.gift-form{display:flex;gap:7px;align-items:center;flex-wrap:wrap}.gift-form select{width:auto;flex:1;min-width:140px}.gift-form button{white-space:nowrap}@media(max-width:520px){nav{gap:9px}nav a{font-size:12px}.feed-head{align-items:flex-start}.feed-video{max-height:62vh}}
+ </style></head><body><header><div class="top"><a class="brand" href="${user?'/app':'/'}">🌙 MOONET</a><nav>${nav}</nav></div></header><main>${content}</main><footer>MOONET © ${new Date().getFullYear()} · Create · Like · Comment · Connect</footer></body></html>`;}
+function render(req,title,content,user=req.user||null){if(user)user={...user,_csrf:req.session.csrfToken||''};resSend(req,title,content,user);}
+function resSend(req,title,content,user){req._res.send(page(title,content,user));}
+function requireUser(req,res,next){const id=req.session.userId;if(!id)return res.redirect('/login');const u=get('SELECT id,name,email,moon,referral_code,suspended FROM users WHERE id=?',id);if(!u||u.suspended){req.session.destroy(()=>{});return res.redirect('/login');}req.user=u;next();}
+function requireAdmin(req,res,next){if(req.session.isAdmin!==true)return res.redirect('/admin/login');next();}
+function validateCsrf(req,res,next){const submitted=String(req.body?._csrf||'');const expected=String(req.session?.csrfToken||'');const a=Buffer.from(submitted),b=Buffer.from(expected);if(!a.length||!b.length||a.length!==b.length||!crypto.timingSafeEqual(a,b))return res.status(403).send(page('Security Check','<div class="card">Security check failed. Reload the page and try again.</div>'));next();}
+const upload = multer({
+ storage: multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
+  filename: (_req, file, cb) => {
+   const ext = path.extname(file.originalname || '').toLowerCase().replace(/[^.a-z0-9]/g, '').slice(0, 12);
+   cb(null, `${Date.now()}-${crypto.randomBytes(8).toString('hex')}${ext}`);
   }
-
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="theme-color" content="#0b8f54">
-<title>${esc(title)} | MOONET</title>
-<style>
-:root{--green:#0b8f54;--deep:#087443;--pale:#e9f9ef;--line:#dce9e0;--ink:#183126;--muted:#63756b}
-*{box-sizing:border-box}
-body{margin:0;background:#f5faf6;color:var(--ink);font-family:Arial,sans-serif}
-header{position:sticky;top:0;z-index:10;background:#fff;border-bottom:1px solid var(--line);padding:13px 16px}
-.top{max-width:1050px;margin:auto;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
-.brand{font-size:25px;font-weight:800;color:var(--green);text-decoration:none}
-nav{display:flex;align-items:center;gap:13px;flex-wrap:wrap}
-a{color:var(--green);text-decoration:none}
-nav a{font-size:14px;font-weight:700}
-main{width:min(94%,900px);margin:22px auto;min-height:68vh}
-.hero,.card{background:#fff;border:1px solid var(--line);padding:20px;border-radius:17px;margin-bottom:16px;box-shadow:0 4px 16px #0b5b2b0a}
-.hero{text-align:center;padding:34px 20px}
-h1,h2,h3{margin-top:0}
-.muted{color:var(--muted);line-height:1.55}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px}
-.number{font-size:29px;font-weight:800;margin:10px 0;color:var(--green)}
-button,.button{display:inline-block;background:var(--green);color:white;border:0;border-radius:10px;padding:11px 16px;font-weight:700;cursor:pointer;font-size:14px}
-.secondary{background:#e8f4ec;color:var(--deep)}
-.danger{background:#b42318}
-.inline{display:inline}
-form.stack{display:grid;gap:12px}
-input,select,textarea{width:100%;padding:12px;border:1px solid #cbded0;border-radius:9px;background:#fff;color:var(--ink);font:inherit}
-label{display:grid;gap:7px;color:#30493a;font-weight:600}
-.message{padding:12px;border-radius:9px;background:var(--pale);margin-bottom:14px}
-.error{color:#a11}
-.success{color:var(--deep)}
-.table-wrap{overflow-x:auto}
-table{width:100%;border-collapse:collapse}
-th,td{text-align:left;padding:10px;border-bottom:1px solid var(--line);font-size:13px}
-footer{text-align:center;padding:25px;color:var(--muted)}
-video{width:100%;max-height:600px;background:#111;border-radius:13px}
-.feed-card{padding:0;overflow:hidden}
-.feed-head,.feed-actions,.feed-body{padding:15px}
-.feed-head{display:flex;justify-content:space-between;gap:10px;align-items:center}
-.feed-video{display:block;width:100%;max-height:70vh;aspect-ratio:9/14;object-fit:contain;background:#101010;border-radius:0}
-.feed-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--line)}
-.tiny{font-size:12px}
-.comment{padding:9px 0;border-bottom:1px solid #edf3ee}
-.pill{display:inline-block;background:var(--pale);color:var(--deep);padding:5px 9px;border-radius:20px;font-size:12px;font-weight:700}
-.feed-compose{border:2px dashed #b9dec6}
-.gift-form{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
-.gift-form select{width:auto;flex:1;min-width:140px}
-.gift-form button{white-space:nowrap}
-@media(max-width:520px){nav{gap:9px}nav a{font-size:12px}.feed-head{align-items:flex-start}.feed-video{max-height:62vh}}
-</style>
-</head>
-<body>
-<header><div class="top">
-<a class="brand" href="${user ? '/app' : '/'}">🌙 MOONET</a>
-<nav>${nav}</nav>
-</div></header>
-<main>${content}</main>
-<footer>MOONET © ${new Date().getFullYear()} · Create · Like · Comment · Connect</footer>
-</body>
-</html>`;
-}
-
-function render(req, title, content, user = req.user || null) {
-  if (user) user = { ...user, _csrf: req.session.csrfToken || '' };
-  resSend(req, title, content, user);
-}
-
-function resSend(req, title, content, user) {
-  req._res.send(page(title, content, user));
-}
-
-function requireUser(req, res, next) {
-  const id = req.session.userId;
-  if (!id) return res.redirect('/login');
-
-  const u = get(
-    'SELECT id,name,email,moon,referral_code,suspended FROM users WHERE id=?',
-    id
-  );
-
-  if (!u || u.suspended) {
-    req.session.destroy(() => {});
-    return res.redirect('/login');
-  }
-
-  req.user = u;
-  next();
-}
-
-function requireAdmin(req, res, next) {
-  if (req.session.isAdmin !== true) return res.redirect('/admin/login');
-  next();
-}
-
-function validateCsrf(req, res, next) {
-  const submitted = String(req.body?._csrf || '');
-  const expected = String(req.session?.csrfToken || '');
-  const a = Buffer.from(submitted);
-  const b = Buffer.from(expected);
-
-  if (!a.length || !b.length || a.length !== b.length ||
-      !crypto.timingSafeEqual(a, b)) {
-    return res.status(403).send(
-      page('Security Check',
-        '<div class="card">Security check failed. Reload the page and try again.</div>')
-    );
-  }
-
-  next();
-}
+ }),
+ limits: { fileSize: 100 * 1024 * 1024, files: 1 },
+ fileFilter: (_req, file, cb) => {
+  const allowed = /^(video\/(mp4|webm|quicktime|ogg)|image\/(jpeg|png|gif|webp)|audio\/(mpeg|mp3|mp4|wav|ogg|webm|aac|x-wav))$/i;
+  if (allowed.test(file.mimetype)) return cb(null, true);
+  cb(new Error('Unsupported file type. Upload a video, photo, or audio file.'));
+ }
+});
+app.use('/uploads', express.static(UPLOAD_DIR, {
+  fallthrough: false,
+  maxAge: '1d'
+}));
 
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
-app.use(express.urlencoded({ extended: false, limit: '20kb' }));
-app.use(express.json({ limit: '20kb' }));
+
+app.use(express.urlencoded({
+  extended: false,
+  limit: '20kb'
+}));
+
+app.use(express.json({
+  limit: '20kb'
+}));
 
 app.use(session({
   name: 'moonet.sid',
@@ -349,59 +295,144 @@ app.use((req, res, next) => {
   if (!req.session.csrfToken) {
     req.session.csrfToken = crypto.randomBytes(32).toString('hex');
   }
+
   req._res = res;
   next();
 });
 
 app.get('/health', (req, res) => {
-  res.json({ ok: true, service: APP_NAME });
+  res.json({
+    ok: true,
+    service: APP_NAME
+  });
 });
 
-app.get('/', (req, res) => res.send(page('Home', `
-<section class="hero">
-<div style="font-size:54px">🌙💚</div>
-<h1>Welcome to MOONET</h1>
-<p class="muted">Your green social video community. Post videos, collect likes, comment, follow creators and send MOON gifts.</p>
-<p><span class="pill">1 MOON = ${MOON_VALUE_RWF} RWF indicative value</span></p>
-<a class="button" href="/signup">Create Account</a>
-<a class="button secondary" href="/login">Login</a>
-</section>
-<section class="grid">
-<div class="card"><h3>🎬 Video Feed</h3><p class="muted">Discover creators and videos from the community.</p></div>
-<div class="card"><h3>💚 Likes & Comments</h3><p class="muted">Show support and share your thoughts.</p></div>
-<div class="card"><h3>🌙 MOON Wallet</h3><p class="muted">Keep gifts and other MOONS separate from your like count.</p></div>
-</section>
-<p class="muted">Likes are popularity counts and do not automatically create MOONS. Gift MOONS are transferred from a sender's balance. Withdrawals require review and available funding.</p>
-`)));
+app.get('/', (req, res) => {
+  res.send(page('Home', `
+    <section class="hero">
+      <div style="font-size:54px">🌙💚</div>
+      <h1>Welcome to MOONET</h1>
+      <p class="muted">
+        Your green social video community.
+        Post videos, collect likes, comment, follow creators
+        and send MOON gifts.
+      </p>
 
-app.get('/signup', (req, res) => res.send(page('Sign Up', `
-<div class="card">
-<h1>Create your MOONET account</h1>
-<form class="stack" method="post" action="/signup">
-${csrfField(req)}
-<label>Full name<input name="name" required minlength="2" maxlength="60"></label>
-<label>Email<input name="email" type="email" required maxlength="254"></label>
-<label>Password<input name="password" type="password" required minlength="10" maxlength="128"></label>
-<label>Referral code (optional)<input name="referral" maxlength="30"></label>
-<button>Create Account</button>
-</form>
-<p class="muted">Already registered? <a href="/login">Login</a></p>
-</div>
-`)));
+      <p>
+        <span class="pill">
+          1 MOON = ${MOON_VALUE_RWF} RWF indicative value
+        </span>
+      </p>
+
+      <a class="button" href="/signup">Create Account</a>
+      <a class="button secondary" href="/login">Login</a>
+    </section>
+
+    <section class="grid">
+      <div class="card">
+        <h3>🎬 Video Feed</h3>
+        <p class="muted">
+          Discover creators and videos from the community.
+        </p>
+      </div>
+
+      <div class="card">
+        <h3>💚 Likes & Comments</h3>
+        <p class="muted">
+          Show support and share your thoughts.
+        </p>
+      </div>
+
+      <div class="card">
+        <h3>🌙 MOON Wallet</h3>
+        <p class="muted">
+          Keep gifts and other MOONS separate from your like count.
+        </p>
+      </div>
+    </section>
+
+    <p class="muted">
+      Likes are popularity counts and do not automatically create
+      MOONS. Gift MOONS are transferred from a sender's balance.
+      Withdrawals require review and available funding.
+    </p>
+  `));
+});
+
+app.get('/signup', (req, res) => {
+  res.send(page('Sign Up', `
+    <div class="card">
+      <h1>Create your MOONET account</h1>
+
+      <form class="stack" method="post" action="/signup">
+        ${csrfField(req)}
+
+        <label>
+          Full name
+          <input
+            name="name"
+            required
+            minlength="2"
+            maxlength="60"
+          >
+        </label>
+
+        <label>
+          Email
+          <input
+            name="email"
+            type="email"
+            required
+            maxlength="254"
+          >
+        </label>
+
+        <label>
+          Password
+          <input
+            name="password"
+            type="password"
+            required
+            minlength="10"
+            maxlength="128"
+          >
+        </label>
+
+        <label>
+          Referral code (optional)
+          <input name="referral" maxlength="30">
+        </label>
+
+        <button>Create Account</button>
+      </form>
+
+      <p class="muted">
+        Already registered? <a href="/login">Login</a>
+      </p>
+    </div>
+  `));
+});
 
 app.post('/signup', validateCsrf, async (req, res) => {
   const name = String(req.body.name || '').trim();
   const email = String(req.body.email || '').trim().toLowerCase();
   const password = String(req.body.password || '');
-  const referral = String(req.body.referral || '').trim().toUpperCase();
+  const referral = String(req.body.referral || '')
+    .trim()
+    .toUpperCase();
 
-  if (name.length < 2 || name.length > 60 ||
-      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ||
-      email.length > 254 || password.length < 10 || password.length > 128) {
+  if (
+    name.length < 2 ||
+    name.length > 60 ||
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ||
+    email.length > 254 ||
+    password.length < 10 ||
+    password.length > 128
+  ) {
     return res.status(400).send(page('Sign Up', `
       <div class="card">
-      ${msg('Check your name, email and password length.', 'error')}
-      <a href="/signup">Try again</a>
+        ${msg('Check your name, email and password length.', 'error')}
+        <a href="/signup">Try again</a>
       </div>
     `));
   }
@@ -409,19 +440,25 @@ app.post('/signup', validateCsrf, async (req, res) => {
   if (get('SELECT id FROM users WHERE email=?', email)) {
     return res.status(409).send(page('Sign Up', `
       <div class="card">
-      ${msg('Email already registered. Please login.', 'error')}
-      <a href="/login">Login</a>
+        ${msg('Email already registered. Please login.', 'error')}
+        <a href="/login">Login</a>
       </div>
     `));
   }
 
   let by = null;
+
   if (referral) {
-    const r = get('SELECT id FROM users WHERE referral_code=?', referral);
+    const r = get(
+      'SELECT id FROM users WHERE referral_code=?',
+      referral
+    );
+
     if (r) by = r.id;
   }
 
   const hash = await bcrypt.hash(password, 12);
+
   let code = referralCode();
 
   while (get('SELECT id FROM users WHERE referral_code=?', code)) {
@@ -430,15 +467,24 @@ app.post('/signup', validateCsrf, async (req, res) => {
 
   try {
     const result = run(
-      'INSERT INTO users(name,email,password_hash,referral_code,referred_by) VALUES(?,?,?,?,?)',
-      name, email, hash, code, by
+      `INSERT INTO users
+       (name, email, password_hash, referral_code, referred_by)
+       VALUES (?, ?, ?, ?, ?)`,
+      name,
+      email,
+      hash,
+      code,
+      by
     );
 
     req.session.regenerate(err => {
-      if (err) return res.status(500).send('Could not create session.');
+      if (err) {
+        return res.status(500).send('Could not create session.');
+      }
 
       req.session.userId = Number(result.lastInsertRowid);
       req.session.csrfToken = crypto.randomBytes(32).toString('hex');
+
       res.redirect('/app');
     });
   } catch (e) {
@@ -447,42 +493,64 @@ app.post('/signup', validateCsrf, async (req, res) => {
   }
 });
 
-app.get('/login', (req, res) => res.send(page('Login', `
-<div class="card">
-<h1>Login to MOONET</h1>
-<form class="stack" method="post" action="/login">
-${csrfField(req)}
-<label>Email<input name="email" type="email" required></label>
-<label>Password<input name="password" type="password" required></label>
-<button>Login</button>
-</form>
-<p class="muted">New? <a href="/signup">Create an account</a></p>
-</div>
-`)));
+app.get('/login', (req, res) => {
+  res.send(page('Login', `
+    <div class="card">
+      <h1>Login to MOONET</h1>
+
+      <form class="stack" method="post" action="/login">
+        ${csrfField(req)}
+
+        <label>
+          Email
+          <input name="email" type="email" required>
+        </label>
+
+        <label>
+          Password
+          <input name="password" type="password" required>
+        </label>
+
+        <button>Login</button>
+      </form>
+
+      <p class="muted">
+        New? <a href="/signup">Create an account</a>
+      </p>
+    </div>
+  `));
+});
 
 app.post('/login', validateCsrf, async (req, res) => {
   const email = String(req.body.email || '').trim().toLowerCase();
   const password = String(req.body.password || '');
+
   const u = get(
-    'SELECT id,password_hash,suspended FROM users WHERE email=?',
+    'SELECT id, password_hash, suspended FROM users WHERE email=?',
     email
   );
 
-  if (!u || u.suspended ||
-      !(await bcrypt.compare(password, u.password_hash))) {
+  if (
+    !u ||
+    u.suspended ||
+    !(await bcrypt.compare(password, u.password_hash))
+  ) {
     return res.status(401).send(page('Login', `
       <div class="card">
-      ${msg('Invalid email or password.', 'error')}
-      <a href="/login">Try again</a>
+        ${msg('Invalid email or password.', 'error')}
+        <a href="/login">Try again</a>
       </div>
     `));
   }
 
   req.session.regenerate(err => {
-    if (err) return res.status(500).send('Could not create session.');
+    if (err) {
+      return res.status(500).send('Could not create session.');
+    }
 
     req.session.userId = u.id;
     req.session.csrfToken = crypto.randomBytes(32).toString('hex');
+
     res.redirect('/app');
   });
 });
@@ -491,21 +559,47 @@ app.post('/logout', requireUser, validateCsrf, (req, res) => {
   req.session.destroy(() => res.redirect('/'));
 });
 
-app.get('/app', requireUser, (req, res) => res.send(page('Home', `
-<section class="hero">
-<h1>Hello, ${esc(req.user.name)} 💚</h1>
-<p class="muted">Your MOONET community dashboard</p>
-<div class="number">${fmt(req.user.moon)} MOONS</div>
-<p class="muted">Indicative value: ${fmt(req.user.moon * MOON_VALUE_RWF)} RWF</p>
-<a class="button" href="/videos">Open Video Feed</a>
-<a class="button secondary" href="/wallet">Wallet</a>
-</section>
-<section class="grid">
-<div class="card"><h3>🎬 Feed</h3><p>Post a video, like and comment.</p><a href="/videos">Open Feed →</a></div>
-<div class="card"><h3>🌙 Wallet</h3><p>${fmt(req.user.moon)} MOONS</p><a href="/wallet">Open Wallet →</a></div>
-<div class="card"><h3>👤 Profile</h3><p>${esc(req.user.email)}</p><a href="/profile">View Profile →</a></div>
-</section>
-`, { ...req.user, _csrf: req.session.csrfToken })));
+app.get('/app', requireUser, (req, res) => {
+  res.send(page('Home', `
+    <section class="hero">
+      <h1>Hello, ${esc(req.user.name)} 💚</h1>
+      <p class="muted">Your MOONET community dashboard</p>
+
+      <div class="number">${fmt(req.user.moon)} MOONS</div>
+
+      <p class="muted">
+        Indicative value:
+        ${fmt(req.user.moon * MOON_VALUE_RWF)} RWF
+      </p>
+
+      <a class="button" href="/videos">Open Video Feed</a>
+      <a class="button secondary" href="/wallet">Wallet</a>
+    </section>
+
+    <section class="grid">
+      <div class="card">
+        <h3>🎬 Feed</h3>
+        <p>Post a video, like and comment.</p>
+        <a href="/videos">Open Feed →</a>
+      </div>
+
+      <div class="card">
+        <h3>🌙 Wallet</h3>
+        <p>${fmt(req.user.moon)} MOONS</p>
+        <a href="/wallet">Open Wallet →</a>
+      </div>
+
+      <div class="card">
+        <h3>👤 Profile</h3>
+        <p>${esc(req.user.email)}</p>
+        <a href="/profile">View Profile →</a>
+      </div>
+    </section>
+  `, {
+    ...req.user,
+    _csrf: req.session.csrfToken
+  }));
+});
 
 app.get('/profile', requireUser, (req, res) => {
   const followers = get(
@@ -518,37 +612,83 @@ app.get('/profile', requireUser, (req, res) => {
     req.user.id
   ).n;
 
+  const joined = get(
+    'SELECT created_at FROM users WHERE id=?',
+    req.user.id
+  ).created_at;
+
   res.send(page('Profile', `
-<div class="card">
-<h1>Your Profile</h1>
-<p><b>Name:</b> ${esc(req.user.name)}</p>
-<p><b>Email:</b> ${esc(req.user.email)}</p>
-<p><b>Referral code:</b> <span class="pill">${esc(req.user.referral_code)}</span></p>
-<p><b>Followers:</b> ${fmt(followers)} · <b>Following:</b> ${fmt(following)}</p>
-<p class="muted">Referral rewards are not enabled yet.</p>
-<p><b>Joined:</b> ${esc(get('SELECT created_at FROM users WHERE id=?', req.user.id).created_at)}</p>
-</div>
-`, { ...req.user, _csrf: req.session.csrfToken }));
+    <div class="card">
+      <h1>Your Profile</h1>
+
+      <p><b>Name:</b> ${esc(req.user.name)}</p>
+      <p><b>Email:</b> ${esc(req.user.email)}</p>
+
+      <p>
+        <b>Referral code:</b>
+        <span class="pill">${esc(req.user.referral_code)}</span>
+      </p>
+
+      <p>
+        <b>Followers:</b> ${fmt(followers)}
+        · <b>Following:</b> ${fmt(following)}
+      </p>
+
+      <p class="muted">Referral rewards are not enabled yet.</p>
+
+      <p><b>Joined:</b> ${esc(joined)}</p>
+    </div>
+  `, {
+    ...req.user,
+    _csrf: req.session.csrfToken
+  }));
 });
 
-app.get('/wallet', requireUser, (req, res) => res.send(page('Wallet', `
-<div class="card">
-<h1>🌙 MOON Wallet</h1>
-<div class="number">${fmt(req.user.moon)} MOONS</div>
-<p>Indicative value: ${fmt(req.user.moon * MOON_VALUE_RWF)} RWF</p>
-<p class="muted">1 MOON = ${MOON_VALUE_RWF} RWF for display purposes only; this does not guarantee cash redemption.</p>
-<a class="button" href="/withdraw">Request Withdrawal</a>
-</div>
-<div class="card">
-<h3>Withdrawal requirements</h3>
-<p>Minimum request: ${fmt(MIN_WITHDRAWAL_MOON)} MOONS (${fmt(MIN_WITHDRAWAL_MOON * MOON_VALUE_RWF)} RWF).</p>
-<p class="muted">Requests require review, available funds and payment-provider approval.</p>
-</div>
-`, { ...req.user, _csrf: req.session.csrfToken })));
+app.get('/wallet', requireUser, (req, res) => {
+  res.send(page('Wallet', `
+    <div class="card">
+      <h1>🌙 MOON Wallet</h1>
+
+      <div class="number">${fmt(req.user.moon)} MOONS</div>
+
+      <p>
+        Indicative value:
+        ${fmt(req.user.moon * MOON_VALUE_RWF)} RWF
+      </p>
+
+      <p class="muted">
+        1 MOON = ${MOON_VALUE_RWF} RWF for display purposes only;
+        this does not guarantee cash redemption.
+      </p>
+
+      <a class="button" href="/withdraw">Request Withdrawal</a>
+    </div>
+
+    <div class="card">
+      <h3>Withdrawal requirements</h3>
+
+      <p>
+        Minimum request: ${fmt(MIN_WITHDRAWAL_MOON)} MOONS
+        (${fmt(MIN_WITHDRAWAL_MOON * MOON_VALUE_RWF)} RWF).
+      </p>
+
+      <p class="muted">
+        Requests require review, available funds and payment-provider approval.
+      </p>
+    </div>
+  `, {
+    ...req.user,
+    _csrf: req.session.csrfToken
+  }));
+});
 
 app.get('/transactions', requireUser, (req, res) => {
   const rows = all(
-    'SELECT type,moon,description,created_at FROM transactions WHERE user_id=? ORDER BY id DESC LIMIT 100',
+    `SELECT type, moon, description, created_at
+     FROM transactions
+     WHERE user_id=?
+     ORDER BY id DESC
+     LIMIT 100`,
     req.user.id
   ).map(t => `
     <tr>
@@ -560,414 +700,372 @@ app.get('/transactions', requireUser, (req, res) => {
   `).join('');
 
   res.send(page('History', `
-<div class="card">
-<h1>Transaction History</h1>
-<div class="table-wrap">
-<table>
-<thead><tr><th>Type</th><th>MOONS</th><th>Description</th><th>Date</th></tr></thead>
-<tbody>${rows || '<tr><td colspan="4">No transactions yet.</td></tr>'}</tbody>
-</table>
-</div>
-</div>
-`, { ...req.user, _csrf: req.session.csrfToken }));
-});
+    <div class="card">
+      <h1>Transaction History</h1>
 
-app.get('/videos', requireUser, (req, res) => {
-  const videos = all(`
-    SELECT v.id,v.user_id,v.title,v.video_url,v.created_at,u.name,
-      (SELECT COUNT(*) FROM video_likes l WHERE l.video_id=v.id) like_count,
-      (SELECT COUNT(*) FROM video_comments c WHERE c.video_id=v.id) comment_count,
-      (SELECT COUNT(*) FROM video_likes l WHERE l.video_id=v.id AND l.user_id=?) liked,
-      (SELECT COUNT(*) FROM follows f WHERE f.follower_id=? AND f.following_id=v.user_id) following
-    FROM videos v JOIN users u ON u.id=v.user_id
-    ORDER BY v.id DESC LIMIT 50
-  `, req.user.id, req.user.id);
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>MOONS</th>
+              <th>Description</th>
+              <th>Date</th>
+            </tr>
+          </thead>
 
-  const cards = videos.map(v => {
-    const comments = all(`
-      SELECT c.comment,c.created_at,u.name
-      FROM video_comments c JOIN users u ON u.id=c.user_id
-      WHERE c.video_id=? ORDER BY c.id DESC LIMIT 10
-    `, v.id).map(c => `
-      <div class="comment">
-        <b>${esc(c.name)}</b> ${esc(c.comment)}
-        <div class="muted tiny">${esc(c.created_at)}</div>
+          <tbody>
+            ${rows || '<tr><td colspan="4">No transactions yet.</td></tr>'}
+          </tbody>
+        </table>
       </div>
-    `).join('');
-
-    const owner = v.user_id === req.user.id;
-
-    return `
-<article class="card feed-card">
-<div class="feed-head">
-  <div><b>${esc(v.name)}</b><div class="muted tiny">${esc(v.created_at)}</div></div>
-  ${owner
-    ? '<span class="pill">Your post</span>'
-    : `<form method="post" action="/follow/${v.user_id}">
-         ${csrfField(req)}
-         <button class="secondary" type="submit">${v.following ? 'Following ✓' : '＋ Follow'}</button>
-       </form>`}
-</div>
-
-<video class="feed-video" data-post-id="${v.id}" controls playsinline preload="metadata" src="${esc(v.video_url)}"></video>
-
-<div class="feed-body">
-  <h3>${esc(v.title)}</h3>
-  <div class="stream-message muted tiny" aria-live="polite">
-    Watch for 30 seconds to earn 0.1 MOON (once per post each day).
-  </div>
-</div>
-
-<div class="feed-actions">
-  <form method="post" action="/videos/${v.id}/like">
-    ${csrfField(req)}
-    <button class="${v.liked ? '' : 'secondary'}" type="submit">${v.liked ? '💚 Liked' : '🤍 Like'} · ${fmt(v.like_count)}</button>
-  </form>
-  <span class="pill">💬 ${fmt(v.comment_count)} comments</span>
-  <span class="pill">🌙 ${fmt(Number(get('SELECT COALESCE(SUM(moon),0) n FROM gifts WHERE video_id=?', v.id).n))} gifted MOONS</span>
-</div>
-
-<div class="feed-body">
-<form class="stack" method="post" action="/videos/${v.id}/comments">
-<input type="hidden" name="_csrf" value="${esc(req.session.csrfToken)}">
-<label>Write a comment
-<textarea name="comment" required maxlength="500" rows="2" placeholder="Write your thoughts..."></textarea>
-</label>
-<button type="submit">Post Comment</button>
-</form>
-
-<div style="margin-top:12px">${comments || '<p class="muted">No comments yet. Be the first!</p>'}</div>
-
-<form class="gift-form" method="post" action="/videos/${v.id}/gift" style="margin-top:14px">
-<input type="hidden" name="_csrf" value="${esc(req.session.csrfToken)}">
-<select name="gift" required>
-<option value="">Send a MOON gift</option>
-<option value="Moon:1">🌙 Moon · 1 MOON</option>
-<option value="Heart:5">💚 Heart · 5 MOONS</option>
-<option value="Rose:10">🌹 Rose · 10 MOONS</option>
-<option value="Diamond:100">💎 Diamond · 100 MOONS</option>
-</select>
-<button type="submit">Send Gift</button>
-</form>
-</div>
-</article>`;
-  }).join('');
-
-  const content = `
-<div class="card feed-compose">
-<h1>🎬 MOONET Feed</h1>
-<p class="muted">
-Post a direct HTTPS video link. File upload is not enabled in this version.
-Likes show popularity; they do not automatically add MOONS.
-Watch a video for 30 seconds to earn 0.1 MOON, once per video per day.
-MOON gifts transfer MOONS from your wallet to the creator.
-</p>
-<form class="stack" method="post" action="/videos">
-${csrfField(req)}
-<label>Video caption/title<input name="title" required maxlength="120" placeholder="What do you want to share?"></label>
-<label>Direct video URL (HTTPS)<input name="video_url" type="url" required maxlength="1000" placeholder="https://example.com/video.mp4"></label>
-<button>＋ Publish Video</button>
-</form>
-</div>
-${cards || '<div class="card"><h3>No videos yet</h3><p class="muted">Be the first to publish a video.</p></div>'}
-`;
-
-  const streamScript = `
-<script>
-(function() {
-  const token = ${JSON.stringify(req.session.csrfToken)};
-  document.querySelectorAll('.feed-video').forEach(function(video) {
-    let timer = null;
-    let sent = false;
-    const message = video.parentElement.querySelector('.stream-message');
-
-    function clear() {
-      if (timer) {
-        clearTimeout(timer);
-        timer = null;
-      }
-    }
-
-    video.addEventListener('play', function() {
-      if (sent || timer) return;
-
-      timer = setTimeout(async function() {
-        timer = null;
-        sent = true;
-
-        try {
-          const response = await fetch('/videos/' + video.dataset.postId + '/stream', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: new URLSearchParams({ _csrf: token })
-          });
-
-          const data = await response.json();
-
-          if (data.ok && data.counted) {
-            if (message) {
-              message.textContent =
-                'Success! You earned 0.1 MOON. New balance: ' +
-                Number(data.balance).toLocaleString('en-US') + ' MOONS.';
-            }
-          } else if (message) {
-            message.textContent = data.message || 'This video did not earn a reward.';
-          }
-        } catch (e) {
-          sent = false;
-          if (message) message.textContent = 'Could not record the stream. Please try again.';
-        }
-      }, ${STREAM_DURATION_MS});
-    });
-
-    video.addEventListener('pause', clear);
-    video.addEventListener('ended', clear);
-  });
-})();
-</script>`;
-
-  res.send(page('Video Feed', content + streamScript, {
+    </div>
+  `, {
     ...req.user,
     _csrf: req.session.csrfToken
   }));
 });
+app.get('/videos',requireUser,(req,res)=>{
+ const videos=all(`SELECT v.id,v.user_id,v.title,v.video_url,v.media_type,v.created_at,u.name,
+ (SELECT COUNT(*) FROM video_likes l WHERE l.video_id=v.id) like_count,
+ (SELECT COUNT(*) FROM video_comments c WHERE c.video_id=v.id) comment_count,
+ (SELECT COUNT(*) FROM video_likes l WHERE l.video_id=v.id AND l.user_id=?) liked,
+ (SELECT COUNT(*) FROM follows f WHERE f.follower_id=? AND f.following_id=v.user_id) following
+ FROM videos v JOIN users u ON u.id=v.user_id ORDER BY v.id DESC LIMIT 50`,
+ req.user.id,req.user.id);
 
-app.post('/videos', requireUser, validateCsrf, (req, res) => {
-  const title = String(req.body.title || '').trim();
-  const videoUrl = String(req.body.video_url || '').trim();
+ const cards=videos.map(v=>{
+  const comments=all(
+   'SELECT c.comment,c.created_at,u.name FROM video_comments c JOIN users u ON u.id=c.user_id WHERE c.video_id=? ORDER BY c.id DESC LIMIT 10',
+   v.id
+  ).map(c=>`<div class="comment"><b>${esc(c.name)}</b> ${esc(c.comment)}<div class="muted tiny">${esc(c.created_at)}</div></div>`).join('');
 
-  let u;
-  try {
-    u = new URL(videoUrl);
-  } catch {
-    return res.status(400).send(page('Video', `
-      <div class="card">
-      ${msg('Invalid video URL.', 'error')}
-      <a href="/videos">Back</a>
-      </div>
-    `, { ...req.user, _csrf: req.session.csrfToken }));
+  const owner=v.user_id===req.user.id;
+
+  return `<article class="card feed-card" id="post-${v.id}">
+   <div class="feed-head">
+    <div><b>${esc(v.name)}</b><div class="muted tiny">${esc(v.created_at)}</div></div>
+    ${owner?'<span class="pill">Your post</span>':`<form method="post" action="/follow/${v.user_id}">${csrfField(req)}<button class="secondary" type="submit">${v.following?'Following ✓':'＋ Follow'}</button></form>`}
+   </div>
+
+   ${v.media_type==='photo'
+    ?`<img class="feed-photo" src="${esc(v.video_url)}" alt="${esc(v.title)}" loading="lazy">`
+    :v.media_type==='audio'
+    ?`<audio class="feed-audio" controls preload="metadata" src="${esc(v.video_url)}"></audio>`
+    :v.media_type==='text'
+    ?`<div class="text-post">${esc(v.title)}</div>`
+    :`<video class="feed-video" data-post-id="${v.id}" controls playsinline preload="metadata" src="${esc(v.video_url)}"></video>`}
+
+   <div class="feed-body">
+    <h3>${esc(v.title)}</h3>
+    <div class="stream-message muted tiny" aria-live="polite">Watch for 30 seconds to earn 0.1 MOON (once per post each day).</div>
+   </div>
+
+   <div class="feed-actions">
+    <form method="post" action="/videos/${v.id}/like">
+     ${csrfField(req)}
+     <button class="${v.liked?'':'secondary'}" type="submit">${v.liked?'💚 Liked':'🤍 Like'} · ${fmt(v.like_count)}</button>
+    </form>
+
+    <span class="pill">💬 ${fmt(v.comment_count)} comments</span>
+    <button class="secondary" type="button" onclick="shareMoonetPost(${v.id})">🔗 Share</button>
+    <span class="pill">🌙 ${fmt(Number(get('SELECT COALESCE(SUM(moon),0) n FROM gifts WHERE video_id=?',v.id).n))} gifted MOONS</span>
+   </div>
+
+   <div class="feed-body">
+    <form class="stack" method="post" action="/videos/${v.id}/comments">
+     ${csrfField(req)}
+     <label>Write a comment<textarea name="comment" required maxlength="500" rows="2" placeholder="Write your thoughts..."></textarea></label>
+     <button type="submit">Post Comment</button>
+    </form>
+
+    <div style="margin-top:12px">${comments||'<p class="muted">No comments yet. Be the first!</p>'}</div>
+
+    <form class="gift-form" method="post" action="/videos/${v.id}/gift" style="margin-top:14px">
+     ${csrfField(req)}
+     <select name="gift" required>
+      <option value="">Send a MOON gift</option>
+      <option value="Moon:1">🌙 Moon · 1 MOON</option>
+      <option value="Heart:5">💚 Heart · 5 MOONS</option>
+      <option value="Rose:10">🌹 Rose · 10 MOONS</option>
+      <option value="Diamond:100">💎 Diamond · 100 MOONS</option>
+     </select>
+     <button type="submit">Send Gift</button>
+    </form>
+   </div>
+  </article>`;
+ }).join('');
+
+ const content=`<div class="card feed-compose">
+  <h1>🎬 MOONET Feed</h1>
+  <p class="muted">Create a video, photo, audio, or text post. Maximum upload size is 100 MB. Eligible video views can earn 0.1 MOON once per post per day.</p>
+
+  <form class="stack" method="post" action="/videos" enctype="multipart/form-data">
+   ${csrfField(req)}
+
+   <label>Post type
+    <select name="media_type" id="post-type" required onchange="updatePostFields()">
+     <option value="video">🎬 Video</option>
+     <option value="photo">📷 Photo</option>
+     <option value="audio">🎵 Song / Audio</option>
+     <option value="text">✍️ Text post</option>
+    </select>
+   </label>
+
+   <label>Caption / text
+    <input name="title" required maxlength="1000" placeholder="What do you want to share?">
+   </label>
+
+   <label id="file-label">Choose file
+    <input type="file" name="media_file" id="media-file" accept="video/mp4,video/webm,video/quicktime,image/jpeg,image/png,image/gif,image/webp,audio/mpeg,audio/mp4,audio/wav,audio/ogg,audio/webm,audio/aac">
+   </label>
+
+   <label id="url-label">Or direct HTTPS video URL (optional)
+    <input name="video_url" type="url" maxlength="1000" placeholder="https://example.com/video.mp4">
+   </label>
+
+   <button>＋ Publish Post</button>
+  </form>
+ </div>${cards||'<div class="card"><h3>No posts yet</h3><p class="muted">Be the first to publish a post.</p></div>'}`;
+
+ res.send(page('Video Feed',content+`<script>
+ function updatePostFields(){
+  const t=document.getElementById('post-type').value;
+  const f=document.getElementById('media-file');
+  const fl=document.getElementById('file-label');
+  const ul=document.getElementById('url-label');
+
+  const accept={
+   video:'video/mp4,video/webm,video/quicktime',
+   photo:'image/jpeg,image/png,image/gif,image/webp',
+   audio:'audio/mpeg,audio/mp4,audio/wav,audio/ogg,audio/webm,audio/aac',
+   text:''
+  };
+
+  f.accept=accept[t]||'';
+  fl.style.display=t==='text'?'none':'block';
+  ul.style.display=t==='video'?'block':'none';
+  f.required=t!=='text'&&!(t==='video'&&document.querySelector('[name=video_url]').value.trim());
+ }
+
+ document.querySelector('[name=video_url]').addEventListener('input',updatePostFields);
+ updatePostFields();
+
+ async function shareMoonetPost(id){
+  const url=location.origin+'/videos#post-'+id;
+  try{
+   if(navigator.share){
+    await navigator.share({title:'MOONET post',text:'Check out this post on MOONET',url});
+   }else if(navigator.clipboard){
+    await navigator.clipboard.writeText(url);
+    alert('Post link copied. Share it with your friends!');
+   }else{
+    prompt('Copy this post link:',url);
+   }
+  }catch(e){
+   if(e.name!=='AbortError')prompt('Copy this post link:',url);
   }
-
-  if (!title || title.length > 120 ||
-      u.protocol !== 'https:' || !u.hostname || videoUrl.length > 1000) {
-    return res.status(400).send('Please provide a valid title and HTTPS video URL.');
-  }
-
-  run('INSERT INTO videos(user_id,title,video_url) VALUES(?,?,?)',
-    req.user.id, title, videoUrl);
-
-  res.redirect('/videos');
+ }
+ </script>`,{...req.user,_csrf:req.session.csrfToken}));
 });
 
-app.post('/videos/:id/stream', requireUser, validateCsrf, (req, res) => {
-  const id = Number(req.params.id);
-
-  if (!Number.isSafeInteger(id) || id < 1) {
-    return res.status(400).json({ ok: false, message: 'Invalid video.' });
+app.post('/videos',requireUser,(req,res,next)=>{
+ upload.single('media_file')(req,res,err=>{
+  if(err){
+   console.error('Upload error:',err.message);
+   return res.status(400).send(page('Upload Post',`<div class="card">${msg(esc(err.message||'Upload failed.'),'error')}<a href="/videos">Back to Feed</a></div>`,{...req.user,_csrf:req.session.csrfToken}));
   }
 
-  const post = get('SELECT id FROM videos WHERE id=?', id);
+  validateCsrf(req,res,()=>{
+   try{
+    const title=String(req.body.title||'').trim();
+    const type=String(req.body.media_type||'video');
+    const videoUrl=String(req.body.video_url||'').trim();
 
-  if (!post) {
-    return res.status(404).json({ ok: false, message: 'Video not found.' });
-  }
+    if(!title||title.length>(type==='text'?1000:120))
+     return res.status(400).send('Please enter a valid caption or text.');
 
-  const today = new Date().toISOString().slice(0, 10);
+    if(!['video','photo','audio','text'].includes(type))
+     return res.status(400).send('Invalid post type.');
 
-  try {
-    const result = transaction(() => {
-      const inserted = run(
-        'INSERT OR IGNORE INTO video_streams(video_id,user_id,stream_date) VALUES(?,?,?)',
-        id, req.user.id, today
-      );
+    let storedUrl='';
 
-      if (Number(inserted.changes) !== 1) {
-        const current = get('SELECT moon FROM users WHERE id=?', req.user.id);
+    if(req.file){
+     storedUrl='/uploads/'+req.file.filename;
+     const mime=req.file.mimetype;
 
-        return {
-          counted: false,
-          reward: 0,
-          balance: Number(current ? current.moon : 0),
-          message: 'This stream has already been counted today.'
-        };
-      }
+     if(type==='video'&&!mime.startsWith('video/'))
+      return res.status(400).send('Choose a video file.');
 
-      const updated = run(
-        'UPDATE users SET moon=ROUND(moon+?,1) WHERE id=?',
-        STREAM_REWARD_MOON,
-        req.user.id
-      );
+     if(type==='photo'&&!mime.startsWith('image/'))
+      return res.status(400).send('Choose a photo file.');
 
-      if (Number(updated.changes) !== 1) {
-        throw new Error('Could not update MOON balance.');
-      }
+     if(type==='audio'&&!mime.startsWith('audio/'))
+      return res.status(400).send('Choose an audio file.');
+    }else if(type==='video'&&videoUrl){
+     let u;
+     try{u=new URL(videoUrl);}catch{return res.status(400).send('Invalid video URL.');}
 
-      run(
-        'INSERT INTO transactions(user_id,type,moon,description,reference) VALUES(?,?,?,?,?)',
-        req.user.id,
-        'stream_reward',
-        STREAM_REWARD_MOON,
-        'Reward for watching video ' + id,
-        ref()
-      );
+     if(u.protocol!=='https:'||!u.hostname||videoUrl.length>1000)
+      return res.status(400).send('Please provide a valid HTTPS video URL.');
 
-      const current = get('SELECT moon FROM users WHERE id=?', req.user.id);
-
-      return {
-        counted: true,
-        reward: STREAM_REWARD_MOON,
-        balance: Number(current.moon),
-        message: 'You earned 0.1 MOON!'
-      };
-    })();
-
-    return res.json({ ok: true, ...result });
-  } catch (e) {
-    console.error('Stream reward error:', e.message);
-    return res.status(500).json({
-      ok: false,
-      message: 'Could not process stream reward.'
-    });
-  }
-});
-
-app.post('/videos/:id/like', requireUser, validateCsrf, (req, res) => {
-  const id = Number(req.params.id);
-
-  if (!Number.isSafeInteger(id) || !get('SELECT id FROM videos WHERE id=?', id)) {
-    return res.status(404).send('Video not found.');
-  }
-
-  const existing = get(
-    'SELECT id FROM video_likes WHERE video_id=? AND user_id=?',
-    id, req.user.id
-  );
-
-  if (existing) {
-    run('DELETE FROM video_likes WHERE video_id=? AND user_id=?', id, req.user.id);
-  } else {
-    run('INSERT INTO video_likes(video_id,user_id) VALUES(?,?)', id, req.user.id);
-  }
-
-  res.redirect('/videos');
-});
-
-app.post('/videos/:id/comments', requireUser, validateCsrf, (req, res) => {
-  const id = Number(req.params.id);
-  const comment = String(req.body.comment || '').trim();
-
-  if (!Number.isSafeInteger(id) || !get('SELECT id FROM videos WHERE id=?', id)) {
-    return res.status(404).send('Video not found.');
-  }
-
-  if (!comment || comment.length > 500) {
-    return res.status(400).send('Comment must be 1–500 characters.');
-  }
-
-  run(
-    'INSERT INTO video_comments(video_id,user_id,comment) VALUES(?,?,?)',
-    id, req.user.id, comment
-  );
-
-  res.redirect('/videos');
-});
-
-app.post('/follow/:id', requireUser, validateCsrf, (req, res) => {
-  const id = Number(req.params.id);
-
-  if (!Number.isSafeInteger(id) || id === req.user.id ||
-      !get('SELECT id FROM users WHERE id=? AND suspended=0', id)) {
-    return res.status(400).send('Invalid creator.');
-  }
-
-  const exists = get(
-    'SELECT id FROM follows WHERE follower_id=? AND following_id=?',
-    req.user.id, id
-  );
-
-  if (exists) {
-    run('DELETE FROM follows WHERE follower_id=? AND following_id=?', req.user.id, id);
-  } else {
-    run('INSERT INTO follows(follower_id,following_id) VALUES(?,?)', req.user.id, id);
-  }
-
-  res.redirect('/videos');
-});
-
-app.post('/videos/:id/gift', requireUser, validateCsrf, (req, res) => {
-  const id = Number(req.params.id);
-  const choice = String(req.body.gift || '');
-  const parts = choice.split(':');
-  const name = parts[0];
-  const amount = Number(parts[1]);
-
-  const video = get('SELECT id,user_id FROM videos WHERE id=?', id);
-
-  if (!video) return res.status(404).send('Video not found.');
-  if (video.user_id === req.user.id) {
-    return res.status(400).send('You cannot send a gift to yourself.');
-  }
-
-  if (![['Moon', 1], ['Heart', 5], ['Rose', 10], ['Diamond', 100]]
-    .some(x => x[0] === name && x[1] === amount)) {
-    return res.status(400).send('Invalid gift.');
-  }
-
-  try {
-    const giftTx = transaction(() => {
-      const debit = run(
-        'UPDATE users SET moon=moon-? WHERE id=? AND moon>=?',
-        amount, req.user.id, amount
-      );
-
-      if (Number(debit.changes) !== 1) throw new Error('INSUFFICIENT');
-
-      run('UPDATE users SET moon=moon+? WHERE id=?', amount, video.user_id);
-
-      run(
-        'INSERT INTO gifts(video_id,sender_id,receiver_id,gift_name,moon) VALUES(?,?,?,?,?)',
-        id, req.user.id, video.user_id, name, amount
-      );
-
-      run(
-        'INSERT INTO transactions(user_id,type,moon,description,reference) VALUES(?,?,?,?,?)',
-        req.user.id, 'gift_sent', -amount,
-        `${name} gift sent to creator of video ${id}`, ref()
-      );
-
-      run(
-        'INSERT INTO transactions(user_id,type,moon,description,reference) VALUES(?,?,?,?,?)',
-        video.user_id, 'gift_received', amount,
-        `${name} gift received on video ${id}`, ref()
-      );
-    });
-
-    giftTx();
-  } catch (e) {
-    if (e.message === 'INSUFFICIENT') {
-      return res.status(400).send(page('Gift', `
-        <div class="card">
-        ${msg('You do not have enough MOONS for this gift.', 'error')}
-        <a href="/wallet">Open Wallet</a>
-        </div>
-      `, { ...req.user, _csrf: req.session.csrfToken }));
+     storedUrl=videoUrl;
+    }else if(type!=='text'){
+     return res.status(400).send('Please choose a file to upload.');
     }
 
-    console.error('Gift error', e.message);
-    return res.status(500).send('Could not send gift.');
-  }
-
-  res.redirect('/videos');
+    run('INSERT INTO videos(user_id,title,video_url,media_type) VALUES(?,?,?,?)',req.user.id,title,storedUrl,type);
+    return res.redirect('/videos');
+   }catch(e){
+    console.error('Create post error:',e.message);
+    return res.status(500).send('Could not publish post.');
+   }
+  });
+ });
 });
 
-app.get('/withdraw', requireUser, (req, res) => res.send(page('Withdraw', `
+app.post('/videos/:id/stream',requireUser,validateCsrf,(req,res)=>{
+ const id=Number(req.params.id);
+
+ if(!Number.isSafeInteger(id)||id<1)
+  return res.status(400).json({ok:false,message:'Invalid video.'});
+
+ const post=get('SELECT id,media_type FROM videos WHERE id=?',id);
+
+ if(!post)
+  return res.status(404).json({ok:false,message:'Post not found.'});
+
+ if(post.media_type!=='video')
+  return res.status(400).json({ok:false,message:'Only video posts can earn watch rewards.'});
+
+ const today=new Date().toISOString().slice(0,10);
+
+ try{
+  const result=transaction(()=>{
+   const inserted=run('INSERT OR IGNORE INTO video_streams(video_id,user_id,stream_date) VALUES(?,?,?)',id,req.user.id,today);
+
+   if(Number(inserted.changes)!==1){
+    const current=get('SELECT moon FROM users WHERE id=?',req.user.id);
+    return {counted:false,reward:0,balance:Number(current?current.moon:0),message:'This stream has already been counted today.'};
+   }
+
+   const updated=run('UPDATE users SET moon=ROUND(moon+?,1) WHERE id=?',STREAM_REWARD_MOON,req.user.id);
+
+   if(Number(updated.changes)!==1)
+    throw new Error('Could not update MOON balance.');
+
+   run('INSERT INTO transactions(user_id,type,moon,description,reference) VALUES(?,?,?,?,?)',req.user.id,'stream_reward',STREAM_REWARD_MOON,'Reward for watching video '+id,ref());
+
+   const current=get('SELECT moon FROM users WHERE id=?',req.user.id);
+
+   return {counted:true,reward:STREAM_REWARD_MOON,balance:Number(current.moon),message:'You earned 0.1 MOON!'};
+  })();
+
+  return res.json({ok:true,...result});
+ }catch(e){
+  console.error('Stream reward error:',e.message);
+  return res.status(500).json({ok:false,message:'Could not process stream reward.'});
+ }
+});
+
+app.post('/videos/:id/like',requireUser,validateCsrf,(req,res)=>{
+ const id=Number(req.params.id);
+
+ if(!Number.isSafeInteger(id)||!get('SELECT id FROM videos WHERE id=?',id))
+  return res.status(404).send('Video not found.');
+
+ const existing=get('SELECT id FROM video_likes WHERE video_id=? AND user_id=?',id,req.user.id);
+
+ if(existing)
+  run('DELETE FROM video_likes WHERE video_id=? AND user_id=?',id,req.user.id);
+ else
+  run('INSERT INTO video_likes(video_id,user_id) VALUES(?,?)',id,req.user.id);
+
+ res.redirect('/videos');
+});
+
+app.post('/videos/:id/comments',requireUser,validateCsrf,(req,res)=>{
+ const id=Number(req.params.id);
+ const comment=String(req.body.comment||'').trim();
+
+ if(!Number.isSafeInteger(id)||!get('SELECT id FROM videos WHERE id=?',id))
+  return res.status(404).send('Video not found.');
+
+ if(!comment||comment.length>500)
+  return res.status(400).send('Comment must be 1–500 characters.');
+
+ run('INSERT INTO video_comments(video_id,user_id,comment) VALUES(?,?,?)',id,req.user.id,comment);
+
+ res.redirect('/videos');
+});
+
+app.post('/follow/:id',requireUser,validateCsrf,(req,res)=>{
+ const id=Number(req.params.id);
+
+ if(!Number.isSafeInteger(id)||id===req.user.id||!get('SELECT id FROM users WHERE id=? AND suspended=0',id))
+  return res.status(400).send('Invalid creator.');
+
+ const exists=get('SELECT id FROM follows WHERE follower_id=? AND following_id=?',req.user.id,id);
+
+ if(exists)
+  run('DELETE FROM follows WHERE follower_id=? AND following_id=?',req.user.id,id);
+ else
+  run('INSERT INTO follows(follower_id,following_id) VALUES(?,?)',req.user.id,id);
+
+ res.redirect('/videos');
+});
+
+app.post('/videos/:id/gift',requireUser,validateCsrf,(req,res)=>{
+ const id=Number(req.params.id);
+ const choice=String(req.body.gift||'');
+ const parts=choice.split(':');
+ const name=parts[0];
+ const amount=Number(parts[1]);
+ const video=get('SELECT id,user_id FROM videos WHERE id=?',id);
+
+ if(!video)
+  return res.status(404).send('Video not found.');
+
+ if(video.user_id===req.user.id)
+  return res.status(400).send('You cannot send a gift to yourself.');
+
+ if(![['Moon',1],['Heart',5],['Rose',10],['Diamond',100]].some(x=>x[0]===name&&x[1]===amount))
+  return res.status(400).send('Invalid gift.');
+
+ try{
+  const giftTx=transaction(()=>{
+   const debit=run('UPDATE users SET moon=moon-? WHERE id=? AND moon>=?',amount,req.user.id,amount);
+
+   if(Number(debit.changes)!==1)
+    throw new Error('INSUFFICIENT');
+
+   run('UPDATE users SET moon=moon+? WHERE id=?',amount,video.user_id);
+   run('INSERT INTO gifts(video_id,sender_id,receiver_id,gift_name,moon) VALUES(?,?,?,?,?)',id,req.user.id,video.user_id,name,amount);
+   run('INSERT INTO transactions(user_id,type,moon,description,reference) VALUES(?,?,?,?,?)',req.user.id,'gift_sent',-amount,`${name} gift sent to creator of video ${id}`,ref());
+   run('INSERT INTO transactions(user_id,type,moon,description,reference) VALUES(?,?,?,?,?)',video.user_id,'gift_received',amount,`${name} gift received on video ${id}`,ref());
+  });
+
+  giftTx();
+ }catch(e){
+  if(e.message==='INSUFFICIENT')
+   return res.status(400).send(page('Gift',`<div class="card">${msg('You do not have enough MOONS for this gift.','error')}<a href="/wallet">Open Wallet</a></div>`,{...req.user,_csrf:req.session.csrfToken}));
+
+  console.error('Gift error',e.message);
+  return res.status(500).send('Could not send gift.');
+ }
+
+ res.redirect('/videos');
+});
+app.get('/withdraw',requireUser,(req,res)=>res.send(page('Withdraw',`
 <div class="card">
 <h1>Request a Withdrawal</h1>
 <p>Available balance: <b>${fmt(req.user.moon)} MOONS</b></p>
 <p>Minimum request: ${fmt(MIN_WITHDRAWAL_MOON)} MOONS.</p>
 <form class="stack" method="post" action="/withdraw">
 ${csrfField(req)}
-<label>Amount in MOONS<input name="moon" type="number" min="${MIN_WITHDRAWAL_MOON}" max="${req.user.moon}" step="1" required></label>
+<label>Amount in MOONS
+<input name="moon" type="number" min="${MIN_WITHDRAWAL_MOON}" max="${req.user.moon}" step="1" required>
+</label>
 <label>Payment method
 <select name="method" required>
 <option value="">Select method</option>
@@ -976,128 +1074,109 @@ ${csrfField(req)}
 <option>Bank</option>
 </select>
 </label>
-<label>Payment account or number<input name="account" required minlength="5" maxlength="120"></label>
+<label>Payment account or number
+<input name="account" required minlength="5" maxlength="120">
+</label>
 <button>Submit Request</button>
 </form>
 <p class="muted">This creates a request for review; it does not send money automatically.</p>
-</div>
-`, { ...req.user, _csrf: req.session.csrfToken })));
+</div>`,{...req.user,_csrf:req.session.csrfToken})));
 
-app.post('/withdraw', requireUser, validateCsrf, (req, res) => {
-  const moon = Number(req.body.moon);
-  const method = String(req.body.method || '');
-  const account = String(req.body.account || '').trim();
+app.post('/withdraw',requireUser,validateCsrf,(req,res)=>{
+const moon=Number(req.body.moon);
+const method=String(req.body.method||'');
+const account=String(req.body.account||'').trim();
 
-  if (!Number.isSafeInteger(moon) || moon < MIN_WITHDRAWAL_MOON ||
-      moon > req.user.moon ||
-      !['MTN MoMo', 'Airtel Money', 'Bank'].includes(method) ||
-      account.length < 5 || account.length > 120) {
-    return res.status(400).send('Invalid withdrawal request.');
-  }
+if(!Number.isSafeInteger(moon)||moon<MIN_WITHDRAWAL_MOON||moon>req.user.moon||!['MTN MoMo','Airtel Money','Bank'].includes(method)||account.length<5||account.length>120)
+return res.status(400).send('Invalid withdrawal request.');
 
-  const amount = moon * MOON_VALUE_RWF;
+const amount=moon*MOON_VALUE_RWF;
 
-  try {
-    transaction(() => {
-      const d = run(
-        'UPDATE users SET moon=moon-? WHERE id=? AND moon>=?',
-        moon, req.user.id, moon
-      );
+try{
+transaction(()=>{
+const d=run('UPDATE users SET moon=moon-? WHERE id=? AND moon>=?',moon,req.user.id,moon);
+if(Number(d.changes)!==1)throw new Error('INSUFFICIENT');
 
-      if (Number(d.changes) !== 1) throw new Error('INSUFFICIENT');
+run('INSERT INTO withdrawals(user_id,moon,amount_rwf,payment_method,payment_account) VALUES(?,?,?,?,?)',req.user.id,moon,amount,method,account);
 
-      run(
-        'INSERT INTO withdrawals(user_id,moon,amount_rwf,payment_method,payment_account) VALUES(?,?,?,?,?)',
-        req.user.id, moon, amount, method, account
-      );
+run('INSERT INTO transactions(user_id,type,moon,description,reference) VALUES(?,?,?,?,?)',req.user.id,'withdrawal_pending',-moon,`Withdrawal request pending review (${amount} RWF)`,ref());
+})();
 
-      run(
-        'INSERT INTO transactions(user_id,type,moon,description,reference) VALUES(?,?,?,?,?)',
-        req.user.id, 'withdrawal_pending', -moon,
-        `Withdrawal request pending review (${amount} RWF)`, ref()
-      );
-    })();
+res.send(page('Withdrawal Submitted',`
+<div class="card">
+${msg('Your withdrawal request has been submitted for review.','success')}
+<a href="/wallet">Return to wallet</a>
+</div>`,{
+...get('SELECT id,name,email,moon,referral_code,suspended FROM users WHERE id=?',req.user.id),
+_csrf:req.session.csrfToken
+}));
 
-    res.send(page('Withdrawal Submitted', `
-      <div class="card">
-      ${msg('Your withdrawal request has been submitted for review.', 'success')}
-      <a href="/wallet">Return to wallet</a>
-      </div>
-    `, {
-      ...get('SELECT id,name,email,moon,referral_code,suspended FROM users WHERE id=?', req.user.id),
-      _csrf: req.session.csrfToken
-    }));
-  } catch (e) {
-    if (e.message === 'INSUFFICIENT') {
-      return res.status(400).send('Insufficient MOONS balance.');
-    }
-
-    console.error(e.message);
-    res.status(500).send('Could not submit withdrawal request.');
-  }
+}catch(e){
+if(e.message==='INSUFFICIENT')return res.status(400).send('Insufficient MOONS balance.');
+console.error(e.message);
+res.status(500).send('Could not submit withdrawal request.');
+}
 });
 
-app.get('/admin/login', (req, res) => res.send(page('Admin Login', `
+app.get('/admin/login',(req,res)=>res.send(page('Admin Login',`
 <div class="card">
 <h1>MOONET Admin Login</h1>
 <form class="stack" method="post" action="/admin/login">
 ${csrfField(req)}
-<label>Email<input name="email" type="email" required></label>
-<label>Password<input name="password" type="password" required></label>
+<label>Email
+<input name="email" type="email" required>
+</label>
+<label>Password
+<input name="password" type="password" required>
+</label>
 <button>Admin Login</button>
 </form>
-</div>
-`)));
+</div>`)));
 
-app.post('/admin/login', validateCsrf, async (req, res) => {
-  const email = String(req.body.email || '').trim().toLowerCase();
-  const password = String(req.body.password || '');
+app.post('/admin/login',validateCsrf,async(req,res)=>{
+const email=String(req.body.email||'').trim().toLowerCase();
+const password=String(req.body.password||'');
 
-  const eb = Buffer.from(email.padEnd(254, '\0').slice(0, 254));
-  const ab = Buffer.from(ADMIN_EMAIL.padEnd(254, '\0').slice(0, 254));
-  const validEmail = crypto.timingSafeEqual(eb, ab);
+const eb=Buffer.from(email.padEnd(254,'\0').slice(0,254));
+const ab=Buffer.from(ADMIN_EMAIL.padEnd(254,'\0').slice(0,254));
+const validEmail=crypto.timingSafeEqual(eb,ab);
 
-  const pb = Buffer.from(password);
-  const abp = Buffer.from(ADMIN_PASSWORD);
-  const validPassword = pb.length === abp.length &&
-    crypto.timingSafeEqual(pb, abp);
+const pb=Buffer.from(password);
+const abp=Buffer.from(ADMIN_PASSWORD);
 
-  if (!validEmail || !validPassword) {
-    return res.status(401).send(page('Admin Login', `
-      <div class="card">
-      ${msg('Invalid admin credentials.', 'error')}
-      <a href="/admin/login">Try again</a>
-      </div>
-    `));
-  }
+const validPassword=pb.length===abp.length&&crypto.timingSafeEqual(pb,abp);
 
-  req.session.regenerate(err => {
-    if (err) return res.status(500).send('Could not create admin session.');
+if(!validEmail||!validPassword)
+return res.status(401).send(page('Admin Login',`
+<div class="card">
+${msg('Invalid admin credentials.','error')}
+<a href="/admin/login">Try again</a>
+</div>`));
 
-    req.session.isAdmin = true;
-    req.session.csrfToken = crypto.randomBytes(32).toString('hex');
-    res.redirect('/admin');
-  });
+req.session.regenerate(err=>{
+if(err)return res.status(500).send('Could not create admin session.');
+
+req.session.isAdmin=true;
+req.session.csrfToken=crypto.randomBytes(32).toString('hex');
+
+res.redirect('/admin');
+});
 });
 
-app.post('/admin/logout', requireAdmin, validateCsrf, (req, res) => {
-  req.session.destroy(() => res.redirect('/admin/login'));
-});
+app.post('/admin/logout',requireAdmin,validateCsrf,(req,res)=>req.session.destroy(()=>res.redirect('/admin/login')));
 
-app.get('/admin', requireAdmin, (req, res) => {
-  const users = Number(get('SELECT COUNT(*) total FROM users').total);
-  const outstanding = Number(get('SELECT COALESCE(SUM(moon),0) total FROM users').total);
-  const revenue = Number(get('SELECT COALESCE(SUM(amount_rwf),0) total FROM revenue').total);
-  const expenses = Number(get('SELECT COALESCE(SUM(amount_rwf),0) total FROM expenses').total);
-  const paid = Number(get("SELECT COALESCE(SUM(amount_rwf),0) total FROM withdrawals WHERE status='paid'").total);
-  const pending = Number(get("SELECT COALESCE(SUM(amount_rwf),0) total FROM withdrawals WHERE status='pending'").total);
-  const profit = revenue - expenses - paid;
+app.get('/admin',requireAdmin,(req,res)=>{
+const users=Number(get('SELECT COUNT(*) total FROM users').total);
+const outstanding=Number(get('SELECT COALESCE(SUM(moon),0) total FROM users').total);
+const revenue=Number(get('SELECT COALESCE(SUM(amount_rwf),0) total FROM revenue').total);
+const expenses=Number(get('SELECT COALESCE(SUM(amount_rwf),0) total FROM expenses').total);
+const paid=Number(get("SELECT COALESCE(SUM(amount_rwf),0) total FROM withdrawals WHERE status='paid'").total);
+const pending=Number(get("SELECT COALESCE(SUM(amount_rwf),0) total FROM withdrawals WHERE status='pending'").total);
+const profit=revenue-expenses-paid;
 
-  const rows = all(`
-    SELECT w.*,u.name,u.email
-    FROM withdrawals w JOIN users u ON u.id=w.user_id
-    ORDER BY w.id DESC LIMIT 100
-  `).map(w => `
+const rows=all(
+'SELECT w.*,u.name,u.email FROM withdrawals w JOIN users u ON u.id=w.user_id ORDER BY w.id DESC LIMIT 100'
+).map(w=>`
 <tr>
 <td>${w.id}</td>
 <td>${esc(w.name)}<br>${esc(w.email)}</td>
@@ -1106,7 +1185,7 @@ app.get('/admin', requireAdmin, (req, res) => {
 <td>${esc(w.payment_method)}<br>${esc(w.payment_account)}</td>
 <td>${esc(w.status)}</td>
 <td>
-${w.status === 'pending' ? `
+${w.status==='pending'?`
 <form method="post" action="/admin/withdrawals/${w.id}/paid">
 ${csrfField(req)}
 <button>Mark Paid</button>
@@ -1114,12 +1193,11 @@ ${csrfField(req)}
 <form method="post" action="/admin/withdrawals/${w.id}/reject">
 ${csrfField(req)}
 <button class="danger">Reject</button>
-</form>` : ''}
+</form>`:''}
 </td>
-</tr>
-`).join('');
+</tr>`).join('');
 
-  const c = `
+const c=`
 <section class="hero">
 <h1>🌙 MOONET Admin</h1>
 <p>Financial overview and platform management</p>
@@ -1143,8 +1221,12 @@ ${csrfField(req)}
 <h2>Record Revenue</h2>
 <form class="stack" method="post" action="/admin/revenue">
 ${csrfField(req)}
-<label>Amount (RWF)<input name="amount" type="number" min="1" required></label>
-<label>Source<input name="source" maxlength="150" required></label>
+<label>Amount (RWF)
+<input name="amount" type="number" min="1" required>
+</label>
+<label>Source
+<input name="source" maxlength="150" required>
+</label>
 <button>Record Revenue</button>
 </form>
 <p class="muted">Only record money actually received and verifiable.</p>
@@ -1154,8 +1236,12 @@ ${csrfField(req)}
 <h2>Record Expense</h2>
 <form class="stack" method="post" action="/admin/expenses">
 ${csrfField(req)}
-<label>Amount (RWF)<input name="amount" type="number" min="1" required></label>
-<label>Description<input name="description" maxlength="200" required></label>
+<label>Amount (RWF)
+<input name="amount" type="number" min="1" required>
+</label>
+<label>Description
+<input name="description" maxlength="200" required>
+</label>
 <button>Record Expense</button>
 </form>
 </div>
@@ -1164,8 +1250,14 @@ ${csrfField(req)}
 <h2>Withdrawal Requests</h2>
 <div class="table-wrap">
 <table>
-<thead><tr><th>ID</th><th>User</th><th>MOONS</th><th>Amount</th><th>Payment details</th><th>Status</th><th>Action</th></tr></thead>
-<tbody>${rows || '<tr><td colspan="7">No withdrawal requests.</td></tr>'}</tbody>
+<thead>
+<tr>
+<th>ID</th><th>User</th><th>MOONS</th><th>Amount</th><th>Payment details</th><th>Status</th><th>Action</th>
+</tr>
+</thead>
+<tbody>
+${rows||'<tr><td colspan="7">No withdrawal requests.</td></tr>'}
+</tbody>
 </table>
 </div>
 </div>
@@ -1176,129 +1268,98 @@ Calculated net profit = recorded revenue − recorded expenses − paid withdraw
 This is a management estimate, not audited accounting profit.
 Only mark a withdrawal paid after independently verifying that the real payment was completed.
 </p>
-</div>
-`;
+</div>`;
 
-  res.send(page('Admin Dashboard', c));
+res.send(page('Admin Dashboard',c));
 });
 
-app.post('/admin/revenue', requireAdmin, validateCsrf, (req, res) => {
-  const amount = Number(req.body.amount);
-  const source = String(req.body.source || '').trim();
+app.post('/admin/revenue',requireAdmin,validateCsrf,(req,res)=>{
+const amount=Number(req.body.amount);
+const source=String(req.body.source||'').trim();
 
-  if (!Number.isSafeInteger(amount) || amount <= 0 ||
-      amount > 100000000000 || !source || source.length > 150) {
-    return res.status(400).send('Invalid revenue entry.');
-  }
+if(!Number.isSafeInteger(amount)||amount<=0||amount>100000000000||!source||source.length>150)
+return res.status(400).send('Invalid revenue entry.');
 
-  run(
-    'INSERT INTO revenue(amount_rwf,source,reference) VALUES(?,?,?)',
-    amount, source, ref()
-  );
-
-  res.redirect('/admin');
+run('INSERT INTO revenue(amount_rwf,source,reference) VALUES(?,?,?)',amount,source,ref());
+res.redirect('/admin');
 });
 
-app.post('/admin/expenses', requireAdmin, validateCsrf, (req, res) => {
-  const amount = Number(req.body.amount);
-  const description = String(req.body.description || '').trim();
+app.post('/admin/expenses',requireAdmin,validateCsrf,(req,res)=>{
+const amount=Number(req.body.amount);
+const description=String(req.body.description||'').trim();
 
-  if (!Number.isSafeInteger(amount) || amount <= 0 ||
-      amount > 100000000000 || !description || description.length > 200) {
-    return res.status(400).send('Invalid expense entry.');
-  }
+if(!Number.isSafeInteger(amount)||amount<=0||amount>100000000000||!description||description.length>200)
+return res.status(400).send('Invalid expense entry.');
 
-  run(
-    'INSERT INTO expenses(amount_rwf,description) VALUES(?,?)',
-    amount, description
-  );
-
-  res.redirect('/admin');
+run('INSERT INTO expenses(amount_rwf,description) VALUES(?,?)',amount,description);
+res.redirect('/admin');
 });
 
-app.post('/admin/withdrawals/:id/paid', requireAdmin, validateCsrf, (req, res) => {
-  const id = Number(req.params.id);
-  const w = get('SELECT * FROM withdrawals WHERE id=?', id);
+app.post('/admin/withdrawals/:id/paid',requireAdmin,validateCsrf,(req,res)=>{
+const id=Number(req.params.id);
 
-  if (!Number.isSafeInteger(id) || id < 1) {
-    return res.status(400).send('Invalid withdrawal ID.');
-  }
+if(!Number.isSafeInteger(id)||id<1)
+return res.status(400).send('Invalid withdrawal ID.');
 
-  if (!w || w.status !== 'pending') {
-    return res.status(409).send('Withdrawal is not pending.');
-  }
+const w=get('SELECT * FROM withdrawals WHERE id=?',id);
 
-  transaction(() => {
-    const u = run(
-      "UPDATE withdrawals SET status='paid' WHERE id=? AND status='pending'",
-      id
-    );
+if(!w||w.status!=='pending')
+return res.status(409).send('Withdrawal is not pending.');
 
-    if (Number(u.changes) !== 1) throw new Error('NOT_PENDING');
+transaction(()=>{
+const u=run("UPDATE withdrawals SET status='paid' WHERE id=? AND status='pending'",id);
 
-    run(
-      'INSERT INTO transactions(user_id,type,moon,description,reference) VALUES(?,?,?,?,?)',
-      w.user_id, 'withdrawal_paid', 0,
-      `Withdrawal ${id} marked paid (${w.amount_rwf} RWF)`, ref()
-    );
-  })();
+if(Number(u.changes)!==1)
+throw new Error('NOT_PENDING');
 
-  res.redirect('/admin');
+run('INSERT INTO transactions(user_id,type,moon,description,reference) VALUES(?,?,?,?,?)',w.user_id,'withdrawal_paid',0,`Withdrawal ${id} marked paid (${w.amount_rwf} RWF)`,ref());
+})();
+
+res.redirect('/admin');
 });
 
-app.post('/admin/withdrawals/:id/reject', requireAdmin, validateCsrf, (req, res) => {
-  const id = Number(req.params.id);
-  const w = get('SELECT * FROM withdrawals WHERE id=?', id);
+app.post('/admin/withdrawals/:id/reject',requireAdmin,validateCsrf,(req,res)=>{
+const id=Number(req.params.id);
 
-  if (!Number.isSafeInteger(id) || id < 1) {
-    return res.status(400).send('Invalid withdrawal ID.');
-  }
+if(!Number.isSafeInteger(id)||id<1)
+return res.status(400).send('Invalid withdrawal ID.');
 
-  if (!w || w.status !== 'pending') {
-    return res.status(409).send('Withdrawal is not pending.');
-  }
+const w=get('SELECT * FROM withdrawals WHERE id=?',id);
 
-  transaction(() => {
-    const u = run(
-      "UPDATE withdrawals SET status='rejected' WHERE id=? AND status='pending'",
-      id
-    );
+if(!w||w.status!=='pending')
+return res.status(409).send('Withdrawal is not pending.');
 
-    if (Number(u.changes) !== 1) throw new Error('NOT_PENDING');
+transaction(()=>{
+const u=run("UPDATE withdrawals SET status='rejected' WHERE id=? AND status='pending'",id);
 
-    run('UPDATE users SET moon=moon+? WHERE id=?', w.moon, w.user_id);
+if(Number(u.changes)!==1)
+throw new Error('NOT_PENDING');
 
-    run(
-      'INSERT INTO transactions(user_id,type,moon,description,reference) VALUES(?,?,?,?,?)',
-      w.user_id, 'withdrawal_refund', w.moon,
-      `Refund for rejected withdrawal ${id}`, ref()
-    );
-  })();
+run('UPDATE users SET moon=moon+? WHERE id=?',w.moon,w.user_id);
 
-  res.redirect('/admin');
+run('INSERT INTO transactions(user_id,type,moon,description,reference) VALUES(?,?,?,?,?)',w.user_id,'withdrawal_refund',w.moon,`Refund for rejected withdrawal ${id}`,ref());
+})();
+
+res.redirect('/admin');
 });
 
-app.use((req, res) => res.status(404).send(page('Not Found', `
+app.use((req,res)=>res.status(404).send(page('Not Found',`
 <div class="card">
 <h1>404</h1>
 <p>Page not found.</p>
 <a href="/">Go Home</a>
-</div>
-`)));
+</div>`)));
 
-app.use((err, req, res, next) => {
-  console.error('Server error:', err.message);
+app.use((err,req,res,next)=>{
+console.error('Server error:',err.message);
 
-  if (res.headersSent) return next(err);
+if(res.headersSent)return next(err);
 
-  res.status(500).send(page('Server Error', `
+res.status(500).send(page('Server Error',`
 <div class="card">
 <h1>Something went wrong</h1>
 <p>Please try again later.</p>
-</div>
-`));
+</div>`));
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`${APP_NAME} is running on port ${PORT}`);
-});
+app.listen(PORT,'0.0.0.0',()=>console.log(`${APP_NAME} is running on port ${PORT}`));
