@@ -1,8 +1,7 @@
 {
   "name": "moonet",
   "version": "1.0.0",
-  "private": true,
-  "description": "MOONET short video social platform and rewards system",
+  "description": "MOONET social platform with videos, photos, audio, posts, wallet and admin dashboard",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -11,9 +10,9 @@
     "node": ">=22"
   },
   "dependencies": {
+    "bcryptjs": "^2.4.3",
     "express": "^5.1.0",
     "express-session": "^1.18.2",
-    "bcryptjs": "^3.0.2",
     "multer": "^2.0.2"
   }
 }
