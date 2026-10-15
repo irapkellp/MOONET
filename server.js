@@ -93,6 +93,19 @@ db.exec(`
    description TEXT NOT NULL,
    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
  );
+ CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+ // MOONET: Safe migration for the settings table.
+// Adds the missing column without deleting existing settings.
+const settingsColumns = db
+  .prepare('PRAGMA table_info(settings)')
+  .all()
+  .map(column => column.name);
+
+if (!settingsColumns.includes('updated_at')) {
+  db.exec('ALTER TABLE settings ADD COLUMN updated_at TEXT');
+}
+
+console.log('MOONET settings migration checked.');
 
  CREATE TABLE IF NOT EXISTS settings(
    key TEXT PRIMARY KEY,
