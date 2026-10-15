@@ -4610,3 +4610,20 @@ app.get('/health/database', (req, res) => {
     });
   }
 });
+// MOONET — Safe settings migration.
+// This preserves existing settings and does not delete any records.
+try {
+  const settingsColumns = db
+    .prepare('PRAGMA table_info(settings)')
+    .all()
+    .map(column => column.name);
+
+  if (!settingsColumns.includes('updated_at')) {
+    db.exec('ALTER TABLE settings ADD COLUMN updated_at TEXT');
+  }
+
+  console.log('MOONET settings schema checked successfully.');
+} catch (error) {
+  console.error('MOONET settings migration failed:', error.message);
+  throw error;
+}
