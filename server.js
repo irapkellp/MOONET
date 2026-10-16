@@ -260,9 +260,7 @@ function esc(value = '') {
   })[char]);
 }
 
-function fmt(value) {
-  return Number(value || 0).toLocaleString('en-US');
-}
+
 
 function ref() {
   return crypto.randomUUID();
@@ -279,7 +277,9 @@ function csrfField(req) {
 function msg(text, cls = '') {
   return `<div class="message ${cls}">${esc(text)}</div>`;
 }
-
+<meta name="theme-color" content="#0b8f54">
+<meta name="offerwall-verification" content="6ad26cecb7b41e65c982b5c2">
+<title>${esc(title)} | MOONET</title>
 function page(title, content, user = null) {
   const csrf = esc(user && user._csrf || '');
 
