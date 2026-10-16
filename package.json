@@ -16,3 +16,8 @@
     "multer": "^2.0.2"
   }
 }
+"dependencies": {
+  "express": "...",
+  "express-session": "...",
+  "bcryptjs": "..."
+}
