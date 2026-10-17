@@ -728,7 +728,12 @@ app.post('/withdraw', requireUser, (req, res) => {
       'Unable to submit withdrawal request. Please try again later.'
     );
   }
-});
+})
+// ============================================
+// ADMIN LOGIN
+// ============================================
+
+app.get('/admin/login', (req, res) => {
 // ============================================
 // ADMIN LOGIN
 // ============================================
