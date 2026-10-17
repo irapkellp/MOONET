@@ -729,19 +729,19 @@ app.post('/withdraw', requireUser, (req, res) => {
     );
   }
 });
-// ================================
-// PART 4: ADMIN DASHBOARD
-// ================================
+// ============================================
+// ADMIN LOGIN
+// ============================================
 
 app.get('/admin/login', (req, res) => {
-  if (req.session.isAdmin === true) {
+  if (req.session && req.session.isAdmin) {
     return res.redirect('/admin');
   }
 
-  res.send(page('Admin Login', `
-    <div class="card">
-      <h1>🔐 MOONET Admin</h1>
-      <p>Injira muri konti y'ubuyobozi.</p>
+  res.send(page('MOONET Admin Login', `
+    <div class="card" style="max-width:450px;margin:40px auto">
+      <h1>🌙 MOONET Admin</h1>
+      <p>Injira muri Admin Dashboard.</p>
 
       <form method="POST" action="/admin/login">
         <label>Email</label>
@@ -760,14 +760,19 @@ app.get('/admin/login', (req, res) => {
           autocomplete="current-password"
         >
 
-        <button type="submit">Login as Admin</button>
+        <button type="submit">Login</button>
       </form>
+
+      <p><a href="/">Back to MOONET</a></p>
     </div>
   `));
 });
 
-app.post('/admin/login', (req, res) => {
-  const email = String(req.body.email || '').trim().toLowerCase();
+app.post('/admin/login', (req, res, next) => {
+  const email = String(req.body.email || '')
+    .trim()
+    .toLowerCase();
+
   const password = String(req.body.password || '');
 
   const adminEmail = String(process.env.ADMIN_EMAIL || '')
@@ -776,73 +781,74 @@ app.post('/admin/login', (req, res) => {
 
   const adminPassword = String(process.env.ADMIN_PASSWORD || '');
 
-  if (
-    !adminEmail ||
-    !adminPassword ||
-    email !== adminEmail ||
-    password !== adminPassword
-  ) {
+  if (!adminEmail || !adminPassword) {
+    return res.status(500).send(
+      'Admin credentials are not configured in Render Environment.'
+    );
+  }
+
+  if (email !== adminEmail || password !== adminPassword) {
     return res.status(401).send(
       page('Login Failed', `
         <div class="card">
           <h2>Login failed</h2>
           <p>Email cyangwa password si byo.</p>
-          <a href="/admin/login">Ongera ugerageze</a>
+          <a href="/admin/login">Try again</a>
         </div>
       `)
     );
   }
 
   req.session.regenerate((err) => {
-    if (err) {
-      return res.status(500).send('Session error. Please try again.');
-    }
+    if (err) return next(err);
 
     req.session.isAdmin = true;
 
     req.session.save((saveErr) => {
-      if (saveErr) {
-        return res.status(500).send('Could not save admin session.');
-      }
-
+      if (saveErr) return next(saveErr);
       res.redirect('/admin');
     });
   });
 });
 
-app.post('/admin/logout', requireAdmin, (req, res) => {
-  req.session.destroy(() => {
+
+// ============================================
+// ADMIN LOGOUT
+// ============================================
+
+app.post('/admin/logout', requireAdmin, (req, res, next) => {
+  req.session.destroy((err) => {
+    if (err) return next(err);
+
+    res.clearCookie('connect.sid');
     res.redirect('/admin/login');
   });
 });
 
+
+// ============================================
+// ADMIN DASHBOARD
+// ============================================
+
 app.get('/admin', requireAdmin, (req, res) => {
-  const totalUsers = db.prepare(`
-    SELECT COUNT(*) AS total FROM users
-  `).get().total;
+  const stats = db.prepare(`
+    SELECT
+      COUNT(*) AS total_users,
+      COALESCE(SUM(moon), 0) AS total_moons
+    FROM users
+  `).get();
 
-  const totalMoons = db.prepare(`
-    SELECT COALESCE(SUM(moon), 0) AS total FROM users
-  `).get().total;
-
-  const pendingWithdrawals = db.prepare(`
-    SELECT COUNT(*) AS total
+  const withdrawalStats = db.prepare(`
+    SELECT
+      COUNT(*) AS total_requests,
+      COALESCE(SUM(
+        CASE WHEN status = 'pending' THEN amount ELSE 0 END
+      ), 0) AS pending_moons
     FROM withdrawals
-    WHERE status = 'pending'
-  `).get().total;
-
-  const pendingAmount = db.prepare(`
-    SELECT COALESCE(SUM(amount), 0) AS total
-    FROM withdrawals
-    WHERE status = 'pending'
-  `).get().total;
-
-  const totalTransactions = db.prepare(`
-    SELECT COUNT(*) AS total FROM transactions
-  `).get().total;
+  `).get();
 
   const users = db.prepare(`
-    SELECT id, name, email, moon, suspended, created_at
+    SELECT id, name, email, moon, created_at
     FROM users
     ORDER BY id DESC
     LIMIT 100
@@ -852,224 +858,210 @@ app.get('/admin', requireAdmin, (req, res) => {
     SELECT
       w.id,
       w.user_id,
+      u.name,
+      u.email,
       w.amount,
       w.method,
       w.destination,
       w.status,
-      w.created_at,
-      u.name,
-      u.email
+      w.created_at
     FROM withdrawals w
     JOIN users u ON u.id = w.user_id
-    ORDER BY
-      CASE WHEN w.status = 'pending' THEN 0 ELSE 1 END,
-      w.id DESC
+    ORDER BY w.id DESC
     LIMIT 100
   `).all();
 
-  const userRows = users.map(u => `
+  const userRows = users.map((u) => `
     <tr>
-      <td>${u.id}</td>
-      <td>${esc(u.name)}</td>
-      <td>${esc(u.email)}</td>
-      <td>${fmt(u.moon)} MOONS</td>
-      <td>${Number(u.suspended) ? 'Suspended' : 'Active'}</td>
+      <td>${escapeHtml(String(u.id))}</td>
+      <td>${escapeHtml(String(u.name || ''))}</td>
+      <td>${escapeHtml(String(u.email || ''))}</td>
+      <td>${escapeHtml(String(u.moon ?? 0))} MOONS</td>
+      <td>${escapeHtml(String(u.created_at || ''))}</td>
     </tr>
   `).join('');
 
-  const withdrawalRows = withdrawals.map(w => `
+  const withdrawalRows = withdrawals.map((w) => `
     <tr>
-      <td>${w.id}</td>
-      <td>${esc(w.name)}<br>${esc(w.email)}</td>
-      <td>${fmt(w.amount)} MOONS</td>
-      <td>${esc(w.method)}</td>
-      <td>${esc(w.destination)}</td>
-      <td>${esc(w.status)}</td>
+      <td>${escapeHtml(String(w.id))}</td>
+      <td>${escapeHtml(String(w.name || ''))}</td>
+      <td>${escapeHtml(String(w.email || ''))}</td>
+      <td>${escapeHtml(String(w.amount))} MOONS</td>
+      <td>${escapeHtml(String(w.method || ''))}</td>
+      <td>${escapeHtml(String(w.destination || ''))}</td>
+      <td>${escapeHtml(String(w.status || ''))}</td>
       <td>
         ${
           w.status === 'pending'
             ? `
               <form method="POST"
-                    action="/admin/withdrawals/${w.id}/approve"
-                    style="margin-bottom:6px">
+                action="/admin/withdrawals/${encodeURIComponent(String(w.id))}/approve"
+                style="display:inline">
                 <button type="submit">Approve</button>
               </form>
 
               <form method="POST"
-                    action="/admin/withdrawals/${w.id}/reject">
-                <button type="submit">Reject & Refund</button>
+                action="/admin/withdrawals/${encodeURIComponent(String(w.id))}/reject"
+                style="display:inline">
+                <button type="submit">Reject</button>
               </form>
             `
-            : '-'
+            : ''
         }
       </td>
     </tr>
   `).join('');
 
   res.send(page('MOONET Admin Dashboard', `
-    <div class="card">
-      <h1>🌙 MOONET ADMIN</h1>
-      <p>Welcome to the administration dashboard.</p>
-
-      <div class="grid">
-        <div class="card">
-          <h3>Users</h3>
-          <h2>${fmt(totalUsers)}</h2>
-        </div>
-
-        <div class="card">
-          <h3>Total MOONS</h3>
-          <h2>${fmt(totalMoons)}</h2>
-        </div>
-
-        <div class="card">
-          <h3>Pending Withdrawals</h3>
-          <h2>${fmt(pendingWithdrawals)}</h2>
-        </div>
-
-        <div class="card">
-          <h3>Pending Amount</h3>
-          <h2>${fmt(pendingAmount)} MOONS</h2>
-        </div>
-
-        <div class="card">
-          <h3>Transactions</h3>
-          <h2>${fmt(totalTransactions)}</h2>
-        </div>
-      </div>
+    <div class="container">
+      <h1>🌙 MOONET Admin Dashboard</h1>
 
       <form method="POST" action="/admin/logout">
-        <button type="submit">Logout Admin</button>
+        <button type="submit">Logout</button>
       </form>
-    </div>
 
-    <div class="card">
-      <h2>💸 Withdrawals</h2>
-      <p>Approve cyangwa wange ubusabe bwo kubikuza.</p>
-
-      <div style="overflow-x:auto">
-        <table>
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>User</th>
-              <th>Amount</th>
-              <th>Method</th>
-              <th>Destination</th>
-              <th>Status</th>
-              <th>Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${withdrawalRows || '<tr><td colspan="7">No withdrawals found.</td></tr>'}
-          </tbody>
-        </table>
+      <div class="card">
+        <h2>Platform Overview</h2>
+        <p>Total users:
+          <strong>${escapeHtml(String(stats.total_users))}</strong>
+        </p>
+        <p>Total user wallet balance:
+          <strong>${escapeHtml(String(stats.total_moons))} MOONS</strong>
+        </p>
+        <p>Withdrawal requests:
+          <strong>${escapeHtml(String(withdrawalStats.total_requests))}</strong>
+        </p>
+        <p>Pending withdrawals:
+          <strong>${escapeHtml(String(withdrawalStats.pending_moons))} MOONS</strong>
+        </p>
       </div>
-    </div>
 
-    <div class="card">
-      <h2>👥 Registered Users</h2>
-
-      <div style="overflow-x:auto">
-        <table>
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>Name</th>
-              <th>Email</th>
-              <th>Balance</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${userRows || '<tr><td colspan="5">No users found.</td></tr>'}
-          </tbody>
-        </table>
+      <div class="card">
+        <h2>Latest Users</h2>
+        <div style="overflow-x:auto">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Name</th>
+                <th>Email</th>
+                <th>Balance</th>
+                <th>Created</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${userRows || '<tr><td colspan="5">No users found.</td></tr>'}
+            </tbody>
+          </table>
+        </div>
       </div>
+
+      <div class="card">
+        <h2>Withdrawal Requests</h2>
+        <p><strong>Important:</strong> Approve ihindura status gusa; ntihita yohereza amafaranga. Banza urebe ko wishyuye umukoresha mbere yo kwemeza ubwishyu.</p>
+
+        <div style="overflow-x:auto">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Name</th>
+                <th>Email</th>
+                <th>Amount</th>
+                <th>Method</th>
+                <th>Destination</th>
+                <th>Status</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${withdrawalRows || '<tr><td colspan="8">No withdrawals found.</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <p><a href="/">Return to MOONET</a></p>
     </div>
   `));
 });
 
-// Approve withdrawal.
-// This records approval; it does NOT send money automatically.
+
+// ============================================
+// APPROVE WITHDRAWAL
+// ============================================
+
 app.post(
   '/admin/withdrawals/:id/approve',
   requireAdmin,
   (req, res) => {
-    const id = Number(req.params.id);
+    const withdrawalId = Number(req.params.id);
 
-    if (!Number.isSafeInteger(id) || id < 1) {
+    if (!Number.isSafeInteger(withdrawalId) || withdrawalId <= 0) {
       return res.status(400).send('Invalid withdrawal ID.');
     }
 
-    try {
-      db.exec('BEGIN IMMEDIATE');
+    const withdrawal = db.prepare(`
+      SELECT id, status
+      FROM withdrawals
+      WHERE id = ?
+    `).get(withdrawalId);
 
-      const withdrawal = db.prepare(`
-        SELECT id, user_id, amount, status
-        FROM withdrawals
-        WHERE id = ?
-      `).get(id);
-
-      if (!withdrawal || withdrawal.status !== 'pending') {
-        db.exec('ROLLBACK');
-        return res.redirect('/admin');
-      }
-
-      db.prepare(`
-        UPDATE withdrawals
-        SET status = 'approved'
-        WHERE id = ? AND status = 'pending'
-      `).run(id);
-
-      db.exec('COMMIT');
-      return res.redirect('/admin');
-    } catch (err) {
-      try {
-        db.exec('ROLLBACK');
-      } catch (_) {}
-
-      console.error('Withdrawal approval error:', err.message);
-      return res.status(500).send('Could not approve withdrawal.');
+    if (!withdrawal) {
+      return res.status(404).send('Withdrawal not found.');
     }
+
+    if (withdrawal.status !== 'pending') {
+      return res.status(400).send(
+        'This withdrawal has already been processed.'
+      );
+    }
+
+    db.prepare(`
+      UPDATE withdrawals
+      SET status = 'approved'
+      WHERE id = ? AND status = 'pending'
+    `).run(withdrawalId);
+
+    return res.redirect('/admin');
   }
 );
 
-// Reject a pending withdrawal and refund the MOONS once.
+
+// ============================================
+// REJECT WITHDRAWAL
+// ============================================
+
 app.post(
   '/admin/withdrawals/:id/reject',
   requireAdmin,
   (req, res) => {
-    const id = Number(req.params.id);
+    const withdrawalId = Number(req.params.id);
 
-    if (!Number.isSafeInteger(id) || id < 1) {
+    if (!Number.isSafeInteger(withdrawalId) || withdrawalId <= 0) {
       return res.status(400).send('Invalid withdrawal ID.');
     }
 
-    try {
-      db.exec('BEGIN IMMEDIATE');
-
+    const rejectWithdrawal = db.transaction(() => {
       const withdrawal = db.prepare(`
         SELECT id, user_id, amount, status
         FROM withdrawals
         WHERE id = ?
-      `).get(id);
+      `).get(withdrawalId);
 
-      if (!withdrawal || withdrawal.status !== 'pending') {
-        db.exec('ROLLBACK');
-        return res.redirect('/admin');
+      if (!withdrawal) {
+        return 'not_found';
       }
 
-      const update = db.prepare(`
+      if (withdrawal.status !== 'pending') {
+        return 'processed';
+      }
+
+      db.prepare(`
         UPDATE withdrawals
         SET status = 'rejected'
         WHERE id = ? AND status = 'pending'
-      `).run(id);
-
-      if (Number(update.changes) !== 1) {
-        db.exec('ROLLBACK');
-        return res.redirect('/admin');
-      }
+      `).run(withdrawalId);
 
       db.prepare(`
         UPDATE users
@@ -1077,26 +1069,21 @@ app.post(
         WHERE id = ?
       `).run(withdrawal.amount, withdrawal.user_id);
 
-      db.prepare(`
-        INSERT INTO transactions
-          (user_id, type, amount, reference, description)
-        VALUES (?, 'refund', ?, ?, ?)
-      `).run(
-        withdrawal.user_id,
-        withdrawal.amount,
-        makeReference('REFUND'),
-        'Withdrawal rejected; MOONS refunded'
-      );
+      return 'rejected';
+    });
 
-      db.exec('COMMIT');
-      return res.redirect('/admin');
-    } catch (err) {
-      try {
-        db.exec('ROLLBACK');
-      } catch (_) {}
+    const result = rejectWithdrawal();
 
-      console.error('Withdrawal rejection error:', err.message);
-      return res.status(500).send('Could not reject withdrawal.');
+    if (result === 'not_found') {
+      return res.status(404).send('Withdrawal not found.');
     }
+
+    if (result === 'processed') {
+      return res.status(400).send(
+        'This withdrawal has already been processed.'
+      );
+    }
+
+    return res.redirect('/admin');
   }
 );
