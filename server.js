@@ -22,6 +22,11 @@ const ADMIN_EMAIL = String(process.env.ADMIN_EMAIL || '').trim().toLowerCase();
 const ADMIN_PASSWORD = String(process.env.ADMIN_PASSWORD || '');
 const SESSION_SECRET = String(process.env.SESSION_SECRET || '');
 
+const OFFERWALL_POSTBACK_SECRET =
+  String(process.env.OFFERWALL_POSTBACK_SECRET || '');
+
+const OFFERWALL_WALL_ID =
+  '5126c45ff0096181b7ad353b735ad976';
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
 
@@ -51,6 +56,8 @@ db.exec(`
 
  CREATE TABLE IF NOT EXISTS users(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  
+Muri server.js, nyuma y'aho tables zisanzwe zikorwa na db.exec(...), onger
   name TEXT NOT NULL,
   email TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
@@ -227,7 +234,16 @@ db.exec(`
   UNIQUE(video_id, liker_id)
  );
 `);
-
+// Offerwall.me: save credited offer transactions
+db.exec(`
+  CREATE TABLE IF NOT EXISTS offerwall_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    transaction_id TEXT NOT NULL UNIQUE,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    reward REAL NOT NULL CHECK(reward > 0),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+`);
 const get = (sql, ...params) => db.prepare(sql).get(...params);
 const all = (sql, ...params) => db.prepare(sql).all(...params);
 const run = (sql, ...params) => db.prepare(sql).run(...params);
