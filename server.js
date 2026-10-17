@@ -1092,3 +1092,7 @@ app.post(
     return res.redirect('/admin');
   }
 );
+  // Start MOONET server
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`MOONET running on port ${PORT}`);
+});
