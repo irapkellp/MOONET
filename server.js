@@ -519,6 +519,14 @@ function requireAdmin(req, res, next) {
 // Escape values before inserting them into HTML.
 function pageLayout(title, body, user = null) {
   const nav = user
+    <nav style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px">
+  <a href="/">Home</a>
+  <a href="/dashboard">Dashboard</a>
+  <a href="/feed">Videos</a>
+  <a href="/offers">Offers 🌙</a>
+  <a href="/wallet">Wallet</a>
+  <a href="/transactions">Transactions</a>
+  <a href="/profile">Profile</a>
     ? `
       <nav style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px">
         <a href="/">Home</a>
