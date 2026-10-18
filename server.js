@@ -2880,8 +2880,6 @@ app.get('/admin/finances', requireAdmin, (req, res) => {
     );
   }
 });
-OFFERWALL_PUBLIC_API_KEY=SHYIRAMO_PUBLIC_API_KEY_YAWE
-OFFERWALL_POSTBACK_SECRET=SHYIRAMO_SECRET_YAWE
 // ============================================
 // MOONET — PART 10B: SIGNED OFFERWALL URL
 // ============================================
