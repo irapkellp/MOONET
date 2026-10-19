@@ -1,5 +1,7 @@
 'use strict';
+
 require('dotenv').config();
+
 const express = require('express');
 const session = require('express-session');
 const bcrypt = require('bcryptjs');
@@ -11,12 +13,12 @@ const { DatabaseSync } = require('node:sqlite');
 
 const app = express();
 
-const PORT = Number(process.env.PORT || 10000);
-const APP_NAME = 'MOONET';
-
 // ================================================
 // MOONET CONFIGURATION
 // ================================================
+
+const PORT = Number(process.env.PORT || 10000);
+const APP_NAME = 'MOONET';
 
 const MOON_VALUE_RWF = 10;
 const MIN_WITHDRAWAL_MOON = 1000;
@@ -36,8 +38,6 @@ const SESSION_SECRET = String(
   process.env.SESSION_SECRET || ''
 );
 
-// Offerwall.me secrets must be configured in Render.
-// Do not put real secret values in source code.
 const OFFERWALL_POSTBACK_SECRET = String(
   process.env.OFFERWALL_POSTBACK_SECRET || ''
 ).trim();
@@ -65,15 +65,20 @@ const DATA_DIR = process.env.DATA_DIR
 
 const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
 
-fs.mkdirSync(DATA_DIR, { recursive: true });
-fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+fs.mkdirSync(DATA_DIR, {
+  recursive: true
+});
+
+fs.mkdirSync(UPLOAD_DIR, {
+  recursive: true
+});
 
 // ================================================
 // DATABASE CONNECTION
+// Preserve the existing database.
+// Never delete or reset moonet.db.
 // ================================================
 
-// IMPORTANT:
-// Reuse the existing database. Do not delete the DB file.
 const DB_PATH = path.join(DATA_DIR, 'moonet.db');
 
 const db = new DatabaseSync(DB_PATH);
@@ -95,7 +100,10 @@ function safeEqualText(a, b) {
     return false;
   }
 
-  return crypto.timingSafeEqual(first, second);
+  return crypto.timingSafeEqual(
+    first,
+    second
+  );
 }
 
 function isValidEmail(email) {
@@ -114,7 +122,9 @@ function escapeHtml(value) {
 }
 
 function randomToken(bytes = 32) {
-  return crypto.randomBytes(bytes).toString('hex');
+  return crypto
+    .randomBytes(bytes)
+    .toString('hex');
 }
 
 // ================================================
@@ -161,20 +171,21 @@ app.use(session({
 
   cookie: {
     httpOnly: true,
+
     secure: process.env.NODE_ENV === 'production',
+
     sameSite: 'lax',
+
     maxAge: 7 * 24 * 60 * 60 * 1000
   }
 }));
 
 // ================================================
 // END OF PART 1
-// PART 2 WILL CONTINUE WITH DATABASE TABLES,
-// SAFE MIGRATIONS AND EXISTING DATA PRESERVATION.
+// PART 2: DATABASE TABLES AND SAFE MIGRATIONS
 // ================================================
 // ================================================
-// PART 2: DATABASE TABLES AND MIGRATIONS
-// Continue directly after Part 1.
+// PART 2: DATABASE TABLES
 // ================================================
 
 // USERS
@@ -360,14 +371,16 @@ db.exec(`
 // ================================================
 
 function getTableColumns(tableName) {
-  // Table names used here must be internal constants,
-  // never user-provided input.
   return db.prepare(
     `PRAGMA table_info("${tableName}")`
   ).all().map(column => column.name);
 }
 
-function addColumnIfMissing(tableName, columnName, definition) {
+function addColumnIfMissing(
+  tableName,
+  columnName,
+  definition
+) {
   const columns = getTableColumns(tableName);
 
   if (!columns.includes(columnName)) {
@@ -377,14 +390,18 @@ function addColumnIfMissing(tableName, columnName, definition) {
   }
 }
 
-// Preserve existing video data while adding media_type.
+// ================================================
+// SAFE MIGRATIONS
+// ================================================
+
+// Add media_type without deleting existing videos.
 addColumnIfMissing(
   'videos',
   'media_type',
   "TEXT NOT NULL DEFAULT 'video'"
 );
 
-// Preserve existing user balances and add reward breakdown columns.
+// Add reward breakdown columns without resetting balances.
 addColumnIfMissing(
   'users',
   'like_moon',
@@ -403,7 +420,10 @@ addColumnIfMissing(
   'INTEGER NOT NULL DEFAULT 0'
 );
 
-// Helpful indexes for common queries.
+// ================================================
+// DATABASE INDEXES
+// ================================================
+
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_transactions_user
     ON transactions(user_id, created_at);
@@ -426,46 +446,51 @@ db.exec(`
 
 // ================================================
 // END OF PART 2
-// PART 3 WILL CONTINUE WITH AUTHENTICATION,
-// SIGNUP, LOGIN, LOGOUT AND USER HELPERS.
-// ================================================
-// ================================================
 // PART 3: AUTHENTICATION AND USER HELPERS
 // ================================================
+// ============================================
+// PART 3: USER HELPERS, AUTHENTICATION & LAYOUT
+// ============================================
 
-// Generate a unique referral code.
+// Generate a unique referral code for a user.
 function generateReferralCode() {
-  return 'MOON' + crypto.randomBytes(5).toString('hex').toUpperCase();
+  return 'MOON' + crypto.randomBytes(4).toString('hex').toUpperCase();
 }
 
-// Find user by ID.
-function getUserById(userId) {
+// Find a user by database ID.
+function getUserById(id) {
   return db.prepare(`
     SELECT *
     FROM users
     WHERE id = ?
-  `).get(Number(userId));
+    LIMIT 1
+  `).get(Number(id)) || null;
 }
 
-// Find user by email.
+// Find a user by email address.
 function getUserByEmail(email) {
+  const normalizedEmail = String(email || '')
+    .trim()
+    .toLowerCase();
+
   return db.prepare(`
     SELECT *
     FROM users
-    WHERE lower(email) = lower(?)
-  `).get(String(email || '').trim());
+    WHERE LOWER(email) = ?
+    LIMIT 1
+  `).get(normalizedEmail) || null;
 }
 
-// Get current logged-in user.
+// Get the currently authenticated user.
 function currentUser(req) {
   if (!req.session || !req.session.userId) {
     return null;
   }
 
-  return getUserById(req.session.userId) || null;
+  return getUserById(req.session.userId);
 }
 
-// Require login.
+// Check whether a user is logged in.
 function requireLogin(req, res, next) {
   const user = currentUser(req);
 
@@ -473,40 +498,29 @@ function requireLogin(req, res, next) {
     return res.redirect('/login');
   }
 
-  if (Number(user.suspended) === 1) {
-    req.session.destroy(() => {
-      res.status(403).send(
-        'Konti yawe yahagaritswe. Hamagara MOONET support.'
-      );
-    });
-
-    return;
-  }
-
   req.user = user;
   next();
 }
 
-// Require administrator.
+// Check whether a user has Admin access.
 function requireAdmin(req, res, next) {
   const user = currentUser(req);
 
   if (!user) {
-    return res.redirect('/admin/login');
+    return res.redirect('/login');
   }
 
-  if (
-    !ADMIN_EMAIL ||
-    user.email.toLowerCase() !== ADMIN_EMAIL
-  ) {
-    return res.status(403).send(
-      'Ntabwo wemerewe gufungura iyi page.'
-    );
-  }
+  const configuredAdminEmail = String(
+    process.env.ADMIN_EMAIL || ''
+  ).trim().toLowerCase();
 
-  if (Number(user.suspended) === 1) {
+  const userEmail = String(user.email || '')
+    .trim()
+    .toLowerCase();
+
+  if (!configuredAdminEmail || userEmail !== configuredAdminEmail) {
     return res.status(403).send(
-      'Konti yawe yahagaritswe.'
+      'Access denied. Admin permission is required.'
     );
   }
 
@@ -514,360 +528,311 @@ function requireAdmin(req, res, next) {
   next();
 }
 
-// Escape values before inserting them return `
-function pageLayout(title, body, user = null) {
-  //Escape values before inserting them into HTML.
-function pageLayout(title, body, user = null) {
-  const nav = user
-    ? `
-      <nav style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px">
-        <a href="/">Home</a>
-        <a href="/dashboard">Dashboard</a>
-        <a href="/feed">Videos</a>
-        <a href="/offers">Offers 🌙</a>
-        <a href="/wallet">Wallet</a>
-        <a href="/transactions">Transactions</a>
-        <a href="/profile">Profile</a>
-        <form action="/logout" method="POST" style="display:inline">
-          <button type="submit">Logout</button>
-        </form>
-      </nav>
-    `
-    : `
-      <nav style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px">
-        <a href="/">Home</a>
-        <a href="/login">Login</a>
-        <a href="/signup">Create account</a>
-      </nav>
-    `;
+// Format MOONS for display.
+function formatMoons(value) {
+  const amount = Number(value || 0);
 
-  return `
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1">
-      <title>${escapeHtml(title)} - MOONET</title>
-      <style>
-        * {
-          box-sizing: border-box;
-        }
-
-        body {
-          margin: 0;
-          padding: 20px;
-          font-family: Arial, sans-serif;
-          background: #f5fff7;
-          color: #183126;
-        }
-
-        main {
-          max-width: 900px;
-          margin: 25px auto;
-          background: white;
-          padding: 24px;
-          border-radius: 16px;
-          box-shadow: 0 4px 18px rgba(0,0,0,.07);
-        }
-
-        a {
-          color: #168447;
-          text-decoration: none;
-        }
-
-        input, button, select, textarea {
-          width: 100%;
-          padding: 12px;
-          margin: 7px 0 14px;
-          border: 1px solid #d4e5d9;
-          border-radius: 8px;
-          font-size: 16px;
-        }
-
-        button {
-          background: #168447;
-          color: white;
-          border: 0;
-          cursor: pointer;
-        }
-
-        .card {
-          padding: 16px;
-          margin: 12px 0;
-          border: 1px solid #e0eee4;
-          border-radius: 12px;
-        }
-
-        .muted {
-          color: #617468;
-        }
-      </style>
-    </head>
-    <body>
-      <main>
-        <h1>🌙 MOONET</h1>
-        ${nav}
-        ${body}
-      </main>
-    </body>
-    </html>
-  `;
-  
-}
-    <nav style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px">
-        <a href="/">Home</a>
-        <a href="/dashboard">Dashboard</a>
-        <a href="/feed">Videos</a>
-        <a href="/offers">Offers 🌙</a>
-        <a href="/wallet">Wallet</a>
-        <a href="/transactions">Transactions</a>
-        <a href="/profile">Profile</a>
-        <form action="/logout" method="POST" style="display:inline">
-          <button type="submit">Logout</button>
-        </form>
-      </nav>
-    `
-    : `
-      <nav style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px">
-        <a href="/">Home</a>
-        <a href="/login">Login</a>
-        <a href="/signup">Create account</a>
-      </nav>
-    `;
-  return `
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1">
-      <title>${escapeHtml(title)} - MOONET</title>
-      <style>
-        * {
-          box-sizing: border-box;
-        }
-        body {
-          margin: 0;
-          padding: 20px;
-          font-family: Arial, sans-serif;
-          background: #f5fff7;
-          color: #183126;
-        }
-        main {
-          max-width: 900px;
-          margin: 25px auto;
-          background: white;
-          padding: 24px;
-          border-radius: 16px;
-          box-shadow: 0 4px 18px rgba(0,0,0,.07);
-        }
-        a {
-          color: #168447;
-          text-decoration: none;
-        }
-        input, button, select, textarea {
-          width: 100%;
-          padding: 12px;
-          margin: 7px 0 14px;
-          border: 1px solid #d4e5d9;
-          border-radius: 8px;
-          font-size: 16px;
-        }
-        button {
-          background: #168447;
-          color: white;
-          border: 0;
-          cursor: pointer;
-        }
-
-        .card {
-          padding: 16px;
-          margin: 12px 0;
-          border: 1px solid #e0eee4;
-          border-radius: 12px;
-        }
-        .muted {
-          color: #617468;
-        }
-      </style>
-    </head>
-    <body>
-      <main>
-        <h1>🌙 MOONET</h1>
-        ${nav}
-        ${body}
-      </main>
-    </body>
-    </html>
-  `;
-}
-      <nav style="display:flex;gap:12px;margin-bottom:20px">
-        <a href="/">Home</a>
-        <a href="/login">Login</a>
-        <a href="/signup">Create account</a>
-      </nav>
-    `;
-  return `
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1">
-      <title>${escapeHtml(title)} - MOONET</title>
-      <style>
-        *{box-sizing:border-box}
-        body{
-          margin:0;
-          padding:20px;
-          font-family:Arial,sans-serif;
-          background:#f5fff7;
-          color:#183126
-        }
-        main{
-          max-width:900px;
-          margin:25px auto;
-          background:white;
-          padding:24px;
-          border-radius:16px;
-          box-shadow:0 4px 18px rgba(0,0,0,.07)
-        }
-        a{color:#168447;text-decoration:none}
-        input,button,select,textarea{
-          width:100%;
-          padding:12px;
-          margin:7px 0 14px;
-          border:1px solid #d4e5d9;
-          border-radius:8px;
-          font-size:16px
-        }
-        button{
-          background:#168447;
-          color:white;
-          border:0;
-          cursor:pointer
-        }
-        .card{
-          padding:16px;
-          margin:12px 0;
-          border:1px solid #e0eee4;
-          border-radius:12px
-        }
-        .muted{color:#617468}
-      </style>
-    </head>
-    <body>
-      <main>
-        <h1>🌙 MOONET</h1>
-        ${nav}
-        ${body}
-      </main>
-    </body>
-    </html>
-  `;
-}
-
-// ================================================
-// HOME PAGE
-// ================================================
-
-app.get('/', (req, res) => {
-  const user = currentUser(req);
-
-  if (user) {
-    return res.redirect('/dashboard');
+  if (!Number.isFinite(amount)) {
+    return '0 MOONS';
   }
 
-  const body = `
-    <h2>Watch. Create. Connect.</h2>
-    <p>Join MOONET and discover videos, creators and rewards.</p>
+  return `${amount.toLocaleString('en-US', {
+    maximumFractionDigits: 4
+  })} MOONS`;
+}
 
-    <div class="card">
-      <h3>🌙 Earn MOONS</h3>
-      <p>Explore videos and participate in available activities.</p>
+// Create the shared HTML page layout.
+// IMPORTANT: Keep only ONE pageLayout() function in the final file.
+function pageLayout(title, body, user = null) {
+  const safeTitle = escapeHtml(title || 'MOONET');
+
+  const nav = user
+    ? `
+      <nav class="navigation">
+        <a href="/">Home</a>
+        <a href="/feed">Videos</a>
+        <a href="/offers">Earn MOONS</a>
+        <a href="/wallet">Wallet</a>
+        <a href="/transactions">History</a>
+        <a href="/profile">Profile</a>
+        ${
+          String(user.email || '').trim().toLowerCase() ===
+          String(process.env.ADMIN_EMAIL || '').trim().toLowerCase()
+            ? '<a href="/admin">Admin</a>'
+            : ''
+        }
+        <a href="/logout">Log out</a>
+      </nav>
+    `
+    : `
+      <nav class="navigation">
+        <a href="/">Home</a>
+        <a href="/login">Log in</a>
+        <a href="/signup">Create account</a>
+      </nav>
+    `;
+
+  const balance = user
+    ? `
+      <div class="balance-card">
+        <span>Your balance</span>
+        <strong>${escapeHtml(formatMoons(user.moon))}</strong>
+      </div>
+    `
+    : '';
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#16a34a">
+  <title>${safeTitle} | MOONET</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      background: #f5f7f5;
+      color: #17211b;
+      line-height: 1.6;
+    }
+
+    header {
+      background: #ffffff;
+      border-bottom: 1px solid #e1e8e2;
+      padding: 16px;
+    }
+
+    .header-inner {
+      max-width: 1000px;
+      margin: auto;
+    }
+
+    .brand {
+      color: #15803d;
+      font-size: 27px;
+      font-weight: 800;
+      text-decoration: none;
+    }
+
+    .tagline {
+      margin: 2px 0 12px;
+      color: #65736a;
+      font-size: 14px;
+    }
+
+    .navigation {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .navigation a {
+      color: #166534;
+      text-decoration: none;
+      background: #f0fdf4;
+      padding: 7px 11px;
+      border-radius: 8px;
+      font-size: 14px;
+    }
+
+    .navigation a:hover {
+      background: #dcfce7;
+    }
+
+    main {
+      max-width: 1000px;
+      margin: 24px auto;
+      padding: 0 16px;
+      min-height: 55vh;
+    }
+
+    .balance-card {
+      background: #166534;
+      color: #ffffff;
+      border-radius: 12px;
+      padding: 14px 18px;
+      margin-top: 15px;
+    }
+
+    .balance-card span {
+      display: block;
+      font-size: 13px;
+      opacity: 0.9;
+    }
+
+    .balance-card strong {
+      font-size: 22px;
+    }
+
+    .card {
+      background: #ffffff;
+      padding: 20px;
+      border-radius: 12px;
+      border: 1px solid #e5e7eb;
+      margin-bottom: 18px;
+    }
+
+    input,
+    select,
+    textarea,
+    button {
+      width: 100%;
+      padding: 12px;
+      margin: 7px 0 14px;
+      border-radius: 8px;
+      border: 1px solid #d1d5db;
+      font: inherit;
+    }
+
+    button,
+    .button {
+      display: inline-block;
+      width: auto;
+      background: #16a34a;
+      color: #ffffff;
+      border: none;
+      padding: 11px 17px;
+      cursor: pointer;
+      text-decoration: none;
+      border-radius: 8px;
+    }
+
+    button:hover,
+    .button:hover {
+      background: #15803d;
+    }
+
+    footer {
+      text-align: center;
+      padding: 22px 16px;
+      color: #6b7280;
+      font-size: 13px;
+    }
+
+    @media (max-width: 600px) {
+      main {
+        margin-top: 16px;
+      }
+
+      .navigation {
+        gap: 7px;
+      }
+
+      .navigation a {
+        font-size: 13px;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <header>
+    <div class="header-inner">
+      <a class="brand" href="/">MOONET 🌙</a>
+      <p class="tagline">Watch. Create. Connect.</p>
+      ${nav}
+      ${balance}
     </div>
+  </header>
 
-    <div class="card">
-      <h3>🎬 Share your videos</h3>
-      <p>Upload videos and connect with other users.</p>
-    </div>
+  <main>
+    ${body || ''}
+  </main>
 
-    <a href="/signup">
-      <button>Create your free account</button>
-    </a>
+  <footer>
+    MOONET &copy; ${new Date().getFullYear()}
+    — Watch, create, connect.
+  </footer>
+</body>
+</html>`;
+    }
+// ============================================
+// PART 4: SIGNUP, LOGIN AND LOGOUT
+// ============================================
 
-    <p>Already registered? <a href="/login">Login here</a>.</p>
-  `;
-
-  res.send(pageLayout('Home', body));
-});
-
-// ================================================
-// SIGNUP PAGE
-// ================================================
-
+// Create a new account.
 app.get('/signup', (req, res) => {
   if (currentUser(req)) {
     return res.redirect('/dashboard');
   }
 
   const body = `
-    <h2>Create your MOONET account</h2>
+    <section class="card">
+      <h2>Create your MOONET account 🌙</h2>
+      <p>Join MOONET to watch, create and connect.</p>
 
-    <form method="POST" action="/signup">
-      <label>Full name</label>
-      <input
-        name="name"
-        required
-        minlength="2"
-        maxlength="80"
-        autocomplete="name"
-      >
+      <form method="POST" action="/signup">
+        <label for="name">Full name</label>
+        <input
+          id="name"
+          name="name"
+          type="text"
+          minlength="2"
+          maxlength="80"
+          autocomplete="name"
+          required
+        >
 
-      <label>Email address</label>
-      <input
-        type="email"
-        name="email"
-        required
-        maxlength="254"
-        autocomplete="email"
-      >
+        <label for="email">Email address</label>
+        <input
+          id="email"
+          name="email"
+          type="email"
+          maxlength="254"
+          autocomplete="email"
+          required
+        >
 
-      <label>Password</label>
-      <input
-        type="password"
-        name="password"
-        required
-        minlength="8"
-        maxlength="128"
-        autocomplete="new-password"
-      >
+        <label for="password">Password</label>
+        <input
+          id="password"
+          name="password"
+          type="password"
+          minlength="8"
+          maxlength="128"
+          autocomplete="new-password"
+          required
+        >
 
-      <label>Referral code (optional)</label>
-      <input
-        name="referral"
-        maxlength="40"
-        autocomplete="off"
-      >
+        <label for="referralCode">
+          Referral code (optional)
+        </label>
+        <input
+          id="referralCode"
+          name="referralCode"
+          type="text"
+          maxlength="30"
+        >
 
-      <button type="submit">Create account</button>
-    </form>
+        <button type="submit">Create account</button>
+      </form>
+
+      <p>Already registered?
+        <a href="/login">Log in</a>
+      </p>
+    </section>
   `;
 
-  res.send(pageLayout('Create account', body));
+  return res.send(pageLayout('Create account', body));
 });
 
-// ================================================
-// SIGNUP HANDLER
-// ================================================
 
-app.post('/signup', (req, res) => {
+// Process signup form.
+app.post('/signup', async (req, res) => {
   try {
     const name = String(req.body.name || '').trim();
     const email = String(req.body.email || '')
       .trim()
       .toLowerCase();
-
     const password = String(req.body.password || '');
-    const referral = String(req.body.referral || '')
+    const referralCode = String(req.body.referralCode || '')
       .trim()
       .toUpperCase();
 
@@ -875,16 +840,16 @@ app.post('/signup', (req, res) => {
       return res.status(400).send(
         pageLayout(
           'Signup error',
-          '<h2>Invalid name</h2><p>Please enter your name correctly.</p>'
+          '<section class="card"><h2>Invalid name</h2><p>Enter a name between 2 and 80 characters.</p><a href="/signup">Try again</a></section>'
         )
       );
     }
 
-    if (!isValidEmail(email) || email.length > 254) {
+    if (!isValidEmail(email)) {
       return res.status(400).send(
         pageLayout(
           'Signup error',
-          '<h2>Invalid email</h2><p>Please enter a valid email address.</p>'
+          '<section class="card"><h2>Invalid email</h2><p>Please enter a valid email address.</p><a href="/signup">Try again</a></section>'
         )
       );
     }
@@ -893,145 +858,202 @@ app.post('/signup', (req, res) => {
       return res.status(400).send(
         pageLayout(
           'Signup error',
-          '<h2>Invalid password</h2><p>Password must contain 8–128 characters.</p>'
+          '<section class="card"><h2>Invalid password</h2><p>Your password must contain between 8 and 128 characters.</p><a href="/signup">Try again</a></section>'
         )
       );
     }
 
+    // Prevent duplicate email registrations.
     if (getUserByEmail(email)) {
       return res.status(409).send(
         pageLayout(
-          'Signup error',
-          '<h2>Email already registered</h2><p>Please login or use another email.</p>'
+          'Account exists',
+          '<section class="card"><h2>Email already registered</h2><p>Try logging in with this email address.</p><a href="/login">Log in</a></section>'
         )
       );
     }
 
-    let referredBy = null;
+    // Look up an optional referral code.
+    let referrer = null;
 
-    if (referral) {
-      const referrer = db.prepare(`
-        SELECT id
+    if (referralCode) {
+      referrer = db.prepare(`
+        SELECT id, referral_code
         FROM users
-        WHERE referral_code = ?
-      `).get(referral);
+        WHERE UPPER(referral_code) = ?
+        LIMIT 1
+      `).get(referralCode) || null;
 
-      if (referrer) {
-        referredBy = referrer.id;
+      if (!referrer) {
+        return res.status(400).send(
+          pageLayout(
+            'Signup error',
+            '<section class="card"><h2>Invalid referral code</h2><p>Check the code or leave the referral field blank.</p><a href="/signup">Try again</a></section>'
+          )
+        );
       }
     }
 
-    const passwordHash = bcrypt.hashSync(password, 12);
+    const passwordHash = await bcrypt.hash(password, 12);
 
-    let referralCode = generateReferralCode();
+    // Generate a referral code that is not already in use.
+    let newReferralCode;
+    let attempts = 0;
 
-    // Avoid collisions with existing referral codes.
-    for (let attempt = 0; attempt < 10; attempt++) {
-      const exists = db.prepare(`
-        SELECT id FROM users WHERE referral_code = ?
-      `).get(referralCode);
+    do {
+      newReferralCode = generateReferralCode();
+      attempts++;
 
-      if (!exists) break;
+      if (attempts > 10) {
+        throw new Error('Could not generate a unique referral code.');
+      }
 
-      referralCode = generateReferralCode();
-    }
+    } while (
+      db.prepare(`
+        SELECT id
+        FROM users
+        WHERE UPPER(referral_code) = ?
+        LIMIT 1
+      `).get(newReferralCode)
+    );
 
-    const result = db.prepare(`
+    /*
+      IMPORTANT:
+      This INSERT assumes the users table contains:
+      name, email, password_hash, moon, referral_code,
+      referred_by and created_at.
+
+      Verify these columns against the existing MOONET
+      database before integrating this route.
+    */
+
+    const insertUser = db.prepare(`
       INSERT INTO users (
         name,
         email,
         password_hash,
         moon,
         referral_code,
-        referred_by
+        referred_by,
+        created_at
       )
-      VALUES (?, ?, ?, 0, ?, ?)
-    `).run(
-      name,
-      email,
-      passwordHash,
-      referralCode,
-      referredBy
-    );
+      VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+    `);
 
-    const userId = Number(result.lastInsertRowid);
+    let result;
 
-    // Regenerate the session after signup.
-    req.session.regenerate((err) => {
-      if (err) {
-        console.error('Signup session error:', err);
-        return res.status(500).send('Could not create session.');
+    try {
+      result = insertUser.run(
+        name,
+        email,
+        passwordHash,
+        0,
+        newReferralCode,
+        referrer ? referrer.id : null
+      );
+    } catch (error) {
+      // A database UNIQUE constraint can also prevent
+      // duplicate registrations when simultaneous requests occur.
+      if (
+        String(error.message || '').toLowerCase().includes('unique')
+      ) {
+        return res.status(409).send(
+          pageLayout(
+            'Account exists',
+            '<section class="card"><h2>Account already exists</h2><p>Try logging in.</p><a href="/login">Log in</a></section>'
+          )
+        );
       }
 
-      req.session.userId = userId;
+      throw error;
+    }
+
+    const newUser = getUserById(Number(result.lastInsertRowid));
+
+    if (!newUser) {
+      throw new Error('New account could not be loaded.');
+    }
+
+    // Regenerate the session ID after authentication.
+    req.session.regenerate((sessionError) => {
+      if (sessionError) {
+        console.error('Signup session error:', sessionError);
+        return res.status(500).send(
+          'Your account was created, but login could not be completed. Please log in.'
+        );
+      }
+
+      req.session.userId = newUser.id;
 
       req.session.save((saveError) => {
         if (saveError) {
-          console.error('Signup save error:', saveError);
-          return res.status(500).send('Could not save session.');
+          console.error('Signup session save error:', saveError);
+          return res.status(500).send(
+            'Your account was created, but login could not be completed. Please log in.'
+          );
         }
 
-        res.redirect('/dashboard');
+        return res.redirect('/dashboard');
       });
     });
+
   } catch (error) {
     console.error('Signup error:', error);
 
-    if (
-      String(error.message || '').includes('UNIQUE constraint failed')
-    ) {
-      return res.status(409).send(
-        'Email cyangwa referral code isanzwe ikoreshwa.'
-      );
-    }
-
-    res.status(500).send('Signup failed. Please try again.');
+    return res.status(500).send(
+      pageLayout(
+        'Signup error',
+        '<section class="card"><h2>Something went wrong</h2><p>Please try again later.</p><a href="/signup">Back to signup</a></section>'
+      )
+    );
   }
 });
 
-// ================================================
-// LOGIN PAGE
-// ================================================
 
+// Login page.
 app.get('/login', (req, res) => {
   if (currentUser(req)) {
     return res.redirect('/dashboard');
   }
 
   const body = `
-    <h2>Login to MOONET</h2>
+    <section class="card">
+      <h2>Welcome back 🌙</h2>
 
-    <form method="POST" action="/login">
-      <label>Email address</label>
-      <input
-        type="email"
-        name="email"
-        required
-        autocomplete="username"
-      >
+      <form method="POST" action="/login">
+        <label for="email">Email address</label>
+        <input
+          id="email"
+          name="email"
+          type="email"
+          autocomplete="email"
+          required
+        >
 
-      <label>Password</label>
-      <input
-        type="password"
-        name="password"
-        required
-        autocomplete="current-password"
-      >
+        <label for="password">Password</label>
+        <input
+          id="password"
+          name="password"
+          type="password"
+          autocomplete="current-password"
+          required
+        >
 
-      <button type="submit">Login</button>
-    </form>
+        <button type="submit">Log in</button>
+      </form>
 
-    <p>New here? <a href="/signup">Create an account</a>.</p>
+      <p>New to MOONET?
+        <a href="/signup">Create an account</a>
+      </p>
+    </section>
   `;
 
-  res.send(pageLayout('Login', body));
+  return res.send(pageLayout('Log in', body));
 });
 
-// ================================================
-// LOGIN HANDLER
-// ================================================
 
-app.post('/login', (req, res) => {
+// Process login.
+app.post('/login', async (req, res) => {
   try {
     const email = String(req.body.email || '')
       .trim()
@@ -1039,196 +1061,603 @@ app.post('/login', (req, res) => {
 
     const password = String(req.body.password || '');
 
-    const user = getUserByEmail(email);
-
-    if (
-      !user ||
-      !bcrypt.compareSync(password, user.password_hash)
-    ) {
-      return res.status(401).send(
+    if (!isValidEmail(email) || !password || password.length > 128) {
+      return res.status(400).send(
         pageLayout(
-          'Login failed',
-          '<h2>Login failed</h2><p>Email cyangwa password si byo.</p><a href="/login">Try again</a>'
+          'Login error',
+          '<section class="card"><h2>Check your details</h2><p>Enter a valid email and password.</p><a href="/login">Try again</a></section>'
         )
       );
     }
 
-    if (Number(user.suspended) === 1) {
-      return res.status(403).send(
-        'Konti yawe yahagaritswe. Hamagara MOONET support.'
+    const user = getUserByEmail(email);
+
+    // Keep the response generic so we do not reveal
+    // whether a particular email has an account.
+    const passwordMatches = user
+      ? await bcrypt.compare(password, user.password_hash)
+      : false;
+
+    if (!user || !passwordMatches) {
+      return res.status(401).send(
+        pageLayout(
+          'Login error',
+          '<section class="card"><h2>Unable to log in</h2><p>The email or password is incorrect.</p><a href="/login">Try again</a></section>'
+        )
       );
     }
 
-    req.session.regenerate((err) => {
-      if (err) {
-        console.error('Login session error:', err);
-        return res.status(500).send('Login failed.');
+    req.session.regenerate((sessionError) => {
+      if (sessionError) {
+        console.error('Login session error:', sessionError);
+        return res.status(500).send('Unable to start your session. Please try again.');
       }
 
       req.session.userId = user.id;
 
       req.session.save((saveError) => {
         if (saveError) {
-          console.error('Login save error:', saveError);
-          return res.status(500).send('Login failed.');
+          console.error('Login session save error:', saveError);
+          return res.status(500).send('Unable to save your session. Please try again.');
         }
 
-        res.redirect('/dashboard');
+        return res.redirect('/dashboard');
       });
     });
+
   } catch (error) {
     console.error('Login error:', error);
-    res.status(500).send('Login failed. Please try again.');
+
+    return res.status(500).send(
+      pageLayout(
+        'Login error',
+        '<section class="card"><h2>Something went wrong</h2><p>Please try again later.</p></section>'
+      )
+    );
   }
 });
 
-// ================================================
-// LOGOUT
-// ================================================
 
-app.post('/logout', (req, res) => {
+// Logout.
+app.get('/logout', (req, res) => {
   if (!req.session) {
     return res.redirect('/');
   }
 
-  req.session.destroy((err) => {
-    if (err) {
-      console.error('Logout error:', err);
-      return res.status(500).send('Could not logout.');
+  req.session.destroy((error) => {
+    if (error) {
+      console.error('Logout error:', error);
+      return res.status(500).send('Unable to log out. Please try again.');
     }
 
-    res.clearCookie('moonet.sid');
-    res.redirect('/');
+    res.clearCookie('moonet.sid', {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production'
+    });
+
+    return res.redirect('/');
   });
 });
+// ============================================
+// PART 5: DASHBOARD, VIDEO FEED AND MOONS
+// ============================================
 
-// ================================================
-// END OF PART 3
-// PART 4: DASHBOARD, PROFILE AND WALLET
-// ================================================
-// ================================================
-// PART 4: DASHBOARD, PROFILE, WALLET AND TRANSACTIONS
-// ================================================
-
-// DASHBOARD
+// Dashboard
 app.get('/dashboard', requireLogin, (req, res) => {
   const user = getUserById(req.user.id);
 
   const videoCount = db.prepare(`
     SELECT COUNT(*) AS total
     FROM videos
-    WHERE user_id = ?
-  `).get(user.id).total;
+  `).get().total;
 
   const recentTransactions = db.prepare(`
-    SELECT type, moon, description, created_at
+    SELECT *
     FROM transactions
+    WHERE user_id = ?
+    ORDER BY id DESC
+    LIMIT 5
+  `).all(user.id);
+
+  const transactionRows = recentTransactions.length
+    ? recentTransactions.map((transaction) => `
+        <tr>
+          <td>${escapeHtml(transaction.type || 'Activity')}</td>
+          <td>${escapeHtml(formatMoons(transaction.amount || 0))}</td>
+          <td>${escapeHtml(transaction.status || 'Completed')}</td>
+        </tr>
+      `).join('')
+    : '<tr><td colspan="3">No transactions yet.</td></tr>';
+
+  const body = `
+    <section class="card">
+      <h2>Welcome to MOONET, ${escapeHtml(user.name || 'User')}! 🌙</h2>
+      <p>Watch videos, connect with people and earn MOONS.</p>
+
+      <h3>Your balance</h3>
+      <p><strong>${escapeHtml(formatMoons(user.moon))}</strong></p>
+
+      <a class="button" href="/feed">Watch videos</a>
+      <a class="button" href="/offers">Earn MOONS</a>
+      <a class="button" href="/wallet">Open wallet</a>
+    </section>
+
+    <section class="card">
+      <h3>MOONET community</h3>
+      <p>Videos available: ${Number(videoCount)}</p>
+      <p>Share your creativity and discover new content.</p>
+    </section>
+
+    <section class="card">
+      <h3>Recent transactions</h3>
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse">
+          <thead>
+            <tr>
+              <th align="left">Activity</th>
+              <th align="left">Amount</th>
+              <th align="left">Status</th>
+            </tr>
+          </thead>
+          <tbody>${transactionRows}</tbody>
+        </table>
+      </div>
+
+      <p><a href="/transactions">View transaction history</a></p>
+    </section>
+  `;
+
+  return res.send(pageLayout('Dashboard', body, user));
+});
+
+
+// Video feed
+app.get('/feed', requireLogin, (req, res) => {
+  const user = getUserById(req.user.id);
+
+  const videos = db.prepare(`
+    SELECT
+      videos.*,
+      users.name AS creator_name
+    FROM videos
+    LEFT JOIN users ON users.id = videos.user_id
+    ORDER BY videos.id DESC
+    LIMIT 100
+  `).all();
+
+  const videoCards = videos.length
+    ? videos.map((video) => {
+        const mediaType = String(video.media_type || 'video')
+          .toLowerCase();
+
+        const isAudio = mediaType === 'audio';
+
+        const mediaPath = String(video.file_path || video.url || '');
+
+        const safeMediaPath = escapeHtml(mediaPath);
+
+        const mediaElement = isAudio
+          ? `
+            <audio controls preload="metadata" style="width:100%">
+              <source src="${safeMediaPath}">
+              Your browser does not support audio.
+            </audio>
+          `
+          : `
+            <video controls playsinline preload="metadata"
+              style="width:100%;max-height:520px;background:#111;border-radius:10px">
+              <source src="${safeMediaPath}">
+              Your browser does not support video playback.
+            </video>
+          `;
+
+        return `
+          <article class="card">
+            <h3>${escapeHtml(video.title || 'MOONET video')}</h3>
+            <p>Creator: ${escapeHtml(video.creator_name || 'MOONET creator')}</p>
+
+            ${mediaElement}
+
+            <p>${escapeHtml(video.description || '')}</p>
+
+            <form method="POST" action="/videos/${Number(video.id)}/like">
+              <button type="submit">💚 Like</button>
+            </form>
+          </article>
+        `;
+      }).join('')
+    : `
+      <section class="card">
+        <h2>No videos yet</h2>
+        <p>Be the first to share something with the MOONET community.</p>
+      </section>
+    `;
+
+  const body = `
+    <h2>MOONET Video Feed 🎬</h2>
+    <p>Discover videos and creators.</p>
+    ${videoCards}
+  `;
+
+  return res.send(pageLayout('Video Feed', body, user));
+});
+
+
+// Like a video.
+// The user can only like a particular video once.
+app.post('/videos/:id/like', requireLogin, (req, res) => {
+  const user = getUserById(req.user.id);
+  const videoId = Number(req.params.id);
+
+  if (!Number.isSafeInteger(videoId) || videoId <= 0) {
+    return res.status(400).send('Invalid video ID.');
+  }
+
+  const video = db.prepare(`
+    SELECT id, user_id
+    FROM videos
+    WHERE id = ?
+  `).get(videoId);
+
+  if (!video) {
+    return res.status(404).send('Video not found.');
+  }
+
+  if (Number(video.user_id) === Number(user.id)) {
+    return res.redirect('/feed');
+  }
+
+  /*
+    IMPORTANT:
+    This route assumes like_history has video_id and user_id,
+    with a UNIQUE constraint or equivalent duplicate protection.
+
+    Confirm the existing database schema before enabling it.
+    This route intentionally does not award MOONS for a like:
+    rewards must be protected against abuse and duplicate claims.
+  */
+
+  try {
+    db.prepare(`
+      INSERT INTO like_history (user_id, video_id, created_at)
+      VALUES (?, ?, datetime('now'))
+    `).run(user.id, videoId);
+
+  } catch (error) {
+    if (String(error.message || '').toLowerCase().includes('unique')) {
+      return res.redirect('/feed');
+    }
+
+    console.error('Video like error:', error);
+    return res.status(500).send('Unable to like this video right now.');
+  }
+
+  return res.redirect('/feed');
+});
+// ============================================
+// PART 6: WALLET, TRANSACTIONS AND WITHDRAWALS
+// ============================================
+
+// Wallet page
+app.get('/wallet', requireLogin, (req, res) => {
+  const user = getUserById(req.user.id);
+
+  const withdrawals = db.prepare(`
+    SELECT *
+    FROM withdrawals
     WHERE user_id = ?
     ORDER BY id DESC
     LIMIT 10
   `).all(user.id);
 
-  const transactionRows = recentTransactions.map((tx) => `
-    <tr>
-      <td>${escapeHtml(tx.type)}</td>
-      <td>${escapeHtml(tx.description)}</td>
-      <td>${Number(tx.moon).toLocaleString()} MOONS</td>
-      <td>${escapeHtml(tx.created_at)}</td>
-    </tr>
-  `).join('');
+  const withdrawalRows = withdrawals.length
+    ? withdrawals.map((item) => `
+        <tr>
+          <td>${Number(item.id)}</td>
+          <td>${escapeHtml(formatMoons(item.amount || 0))}</td>
+          <td>${escapeHtml(item.status || 'Pending')}</td>
+          <td>${escapeHtml(item.created_at || '')}</td>
+        </tr>
+      `).join('')
+    : '<tr><td colspan="4">No withdrawal requests yet.</td></tr>';
 
   const body = `
-    <h2>Murakaza neza, ${escapeHtml(user.name)}! 🌙</h2>
+    <section class="card">
+      <h2>My MOONET Wallet 🌙</h2>
 
-    <div class="card">
-      <h3>Wallet balance</h3>
-      <p style="font-size:28px;font-weight:bold">
-        ${Number(user.moon).toLocaleString()} MOONS
+      <p>Available balance:</p>
+      <h2>${escapeHtml(formatMoons(user.moon))}</h2>
+
+      <p>Minimum withdrawal:
+        ${escapeHtml(formatMoons(MIN_WITHDRAWAL_MOON))}
       </p>
-      <p class="muted">
-        Indicative value: ${(Number(user.moon) * MOON_VALUE_RWF).toLocaleString()} RWF
-      </p>
-      <a href="/wallet">Open wallet</a>
-    </div>
+    </section>
 
-    <div class="card">
-      <h3>Your videos</h3>
-      <p>${Number(videoCount)} videos</p>
-      <a href="/feed">View videos</a>
-    </div>
+    <section class="card">
+      <h3>Request a withdrawal</h3>
 
-    <div class="card">
-      <h3>Quick links</h3>
-      <p><a href="/profile">My profile</a></p>
-      <p><a href="/transactions">Transaction history</a></p>
-      <p><a href="/withdraw">Withdraw MOONS</a></p>
-      <p><a href="/offers">Earn with offers</a></p>
-    </div>
+      <form method="POST" action="/withdraw">
+        <label for="amount">Amount in MOONS</label>
+        <input
+          id="amount"
+          name="amount"
+          type="number"
+          min="${MIN_WITHDRAWAL_MOON}"
+          step="1"
+          required
+        >
 
-    <h3>Recent transactions</h3>
+        <label for="method">Payment method</label>
+        <select id="method" name="method" required>
+          <option value="">Choose a method</option>
+          <option value="MTN MoMo">MTN MoMo</option>
+          <option value="Airtel Money">Airtel Money</option>
+          <option value="Bank transfer">Bank transfer</option>
+        </select>
 
-    <div style="overflow-x:auto">
-      <table style="width:100%;text-align:left">
-        <thead>
-          <tr>
-            <th>Type</th>
-            <th>Description</th>
-            <th>Amount</th>
-            <th>Date</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${transactionRows || '<tr><td colspan="4">No transactions yet.</td></tr>'}
-        </tbody>
-      </table>
-    </div>
+        <label for="account">Payment account or phone number</label>
+        <input
+          id="account"
+          name="account"
+          type="text"
+          maxlength="100"
+          required
+        >
+
+        <button type="submit">Submit withdrawal request</button>
+      </form>
+
+      <p>Withdrawal requests are subject to review and approval.</p>
+    </section>
+
+    <section class="card">
+      <h3>Recent withdrawal requests</h3>
+
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse">
+          <thead>
+            <tr>
+              <th align="left">ID</th>
+              <th align="left">Amount</th>
+              <th align="left">Status</th>
+              <th align="left">Date</th>
+            </tr>
+          </thead>
+          <tbody>${withdrawalRows}</tbody>
+        </table>
+      </div>
+    </section>
   `;
 
-  res.send(pageLayout('Dashboard', body, user));
+  return res.send(pageLayout('My Wallet', body, user));
 });
 
-// ================================================
-// PROFILE
-// ================================================
 
+// Submit withdrawal request
+app.post('/withdraw', requireLogin, (req, res) => {
+  const userId = Number(req.user.id);
+  const amount = Number(req.body.amount);
+  const method = String(req.body.method || '').trim();
+  const account = String(req.body.account || '').trim();
+
+  const allowedMethods = [
+    'MTN MoMo',
+    'Airtel Money',
+    'Bank transfer'
+  ];
+
+  if (
+    !Number.isSafeInteger(amount) ||
+    amount < MIN_WITHDRAWAL_MOON
+  ) {
+    return res.status(400).send(
+      'Enter a whole-number MOONS amount that meets the minimum withdrawal.'
+    );
+  }
+
+  if (!allowedMethods.includes(method)) {
+    return res.status(400).send('Select a supported payment method.');
+  }
+
+  if (!account || account.length > 100) {
+    return res.status(400).send('Enter valid payment account details.');
+  }
+
+  /*
+    IMPORTANT:
+    Before enabling this route, verify the existing withdrawals
+    schema and its status values.
+
+    This implementation reserves the requested MOONS by deducting
+    them from the user's balance inside a database transaction.
+    If the request is later rejected, the Admin workflow must refund
+    the reserved amount exactly once.
+  */
+
+  db.exec('BEGIN IMMEDIATE');
+
+  try {
+    const freshUser = getUserById(userId);
+
+    if (!freshUser || Number(freshUser.moon) < amount) {
+      db.exec('ROLLBACK');
+      return res.status(400).send('Insufficient MOONS balance.');
+    }
+
+    const updateBalance = db.prepare(`
+      UPDATE users
+      SET moon = moon - ?
+      WHERE id = ?
+        AND moon >= ?
+    `);
+
+    const balanceUpdate = updateBalance.run(
+      amount,
+      userId,
+      amount
+    );
+
+    if (Number(balanceUpdate.changes) !== 1) {
+      db.exec('ROLLBACK');
+      return res.status(400).send('Unable to reserve your MOONS.');
+    }
+
+    const withdrawalInsert = db.prepare(`
+      INSERT INTO withdrawals (
+        user_id,
+        amount,
+        method,
+        account,
+        status,
+        created_at
+      )
+      VALUES (?, ?, ?, ?, 'pending', datetime('now'))
+    `);
+
+    withdrawalInsert.run(
+      userId,
+      amount,
+      method,
+      account
+    );
+
+    db.prepare(`
+      INSERT INTO transactions (
+        user_id,
+        type,
+        amount,
+        status,
+        created_at
+      )
+      VALUES (?, 'withdrawal', ?, 'pending', datetime('now'))
+    `).run(userId, -amount);
+
+    db.exec('COMMIT');
+
+    return res.redirect('/wallet');
+
+  } catch (error) {
+    try {
+      db.exec('ROLLBACK');
+    } catch (_) {
+      // The transaction may already have rolled back.
+    }
+
+    console.error('Withdrawal request error:', error);
+
+    return res.status(500).send(
+      'Unable to submit the withdrawal request. Please try again later.'
+    );
+  }
+});
+
+
+// Transaction history page
+app.get('/transactions', requireLogin, (req, res) => {
+  const user = getUserById(req.user.id);
+
+  const transactions = db.prepare(`
+    SELECT *
+    FROM transactions
+    WHERE user_id = ?
+    ORDER BY id DESC
+    LIMIT 100
+  `).all(user.id);
+
+  const rows = transactions.length
+    ? transactions.map((item) => `
+        <tr>
+          <td>${escapeHtml(item.type || 'Activity')}</td>
+          <td>${escapeHtml(formatMoons(item.amount || 0))}</td>
+          <td>${escapeHtml(item.status || '')}</td>
+          <td>${escapeHtml(item.created_at || '')}</td>
+        </tr>
+      `).join('')
+    : '<tr><td colspan="4">No transactions recorded yet.</td></tr>';
+
+  const body = `
+    <section class="card">
+      <h2>Transaction History</h2>
+      <p>Your MOONS activity is shown below.</p>
+
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse">
+          <thead>
+            <tr>
+              <th align="left">Activity</th>
+              <th align="left">Amount</th>
+              <th align="left">Status</th>
+              <th align="left">Date</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </section>
+  `;
+
+  return res.send(pageLayout('Transaction History', body, user));
+});
+// ============================================
+// PART 7: PROFILE, FOLLOW AND COMMENTS
+// ============================================
+
+// User profile
 app.get('/profile', requireLogin, (req, res) => {
   const user = getUserById(req.user.id);
 
+  const followers = db.prepare(`
+    SELECT COUNT(*) AS total
+    FROM follows
+    WHERE following_id = ?
+  `).get(user.id).total;
+
+  const following = db.prepare(`
+    SELECT COUNT(*) AS total
+    FROM follows
+    WHERE follower_id = ?
+  `).get(user.id).total;
+
   const body = `
-    <h2>My profile</h2>
+    <section class="card">
+      <h2>My Profile 👤</h2>
 
-    <div class="card">
-      <p><strong>Name:</strong> ${escapeHtml(user.name)}</p>
-      <p><strong>Email:</strong> ${escapeHtml(user.email)}</p>
-      <p><strong>Referral code:</strong> ${escapeHtml(user.referral_code)}</p>
-      <p><strong>Balance:</strong> ${Number(user.moon).toLocaleString()} MOONS</p>
-      <p><strong>Joined:</strong> ${escapeHtml(user.created_at)}</p>
-    </div>
+      <p><strong>Name:</strong> ${escapeHtml(user.name || '')}</p>
+      <p><strong>Email:</strong> ${escapeHtml(user.email || '')}</p>
+      <p><strong>MOONS:</strong> ${escapeHtml(formatMoons(user.moon))}</p>
 
-    <h3>Update your name</h3>
+      <p><strong>Followers:</strong> ${Number(followers)}</p>
+      <p><strong>Following:</strong> ${Number(following)}</p>
 
-    <form method="POST" action="/profile">
-      <label>Name</label>
-      <input
-        name="name"
-        value="${escapeHtml(user.name)}"
-        required
-        minlength="2"
-        maxlength="80"
-      >
-      <button type="submit">Save profile</button>
-    </form>
+      <form method="POST" action="/profile">
+        <label for="name">Update your name</label>
+        <input
+          id="name"
+          name="name"
+          type="text"
+          minlength="2"
+          maxlength="80"
+          value="${escapeHtml(user.name || '')}"
+          required
+        >
+
+        <button type="submit">Save profile</button>
+      </form>
+    </section>
   `;
 
-  res.send(pageLayout('Profile', body, user));
+  return res.send(pageLayout('My Profile', body, user));
 });
 
+
+// Update profile
 app.post('/profile', requireLogin, (req, res) => {
   const name = String(req.body.name || '').trim();
 
   if (name.length < 2 || name.length > 80) {
     return res.status(400).send(
-      'Izina rigomba kuba hagati y’inyuguti 2 na 80.'
+      'Name must contain between 2 and 80 characters.'
     );
   }
 
@@ -1238,353 +1667,81 @@ app.post('/profile', requireLogin, (req, res) => {
     WHERE id = ?
   `).run(name, req.user.id);
 
-  res.redirect('/profile');
+  return res.redirect('/profile');
 });
 
-// ================================================
-// WALLET
-// ================================================
 
-app.get('/wallet', requireLogin, (req, res) => {
-  const user = getUserById(req.user.id);
+// Follow another user
+app.post('/users/:id/follow', requireLogin, (req, res) => {
+  const followerId = Number(req.user.id);
+  const followingId = Number(req.params.id);
 
-  const balance = Number(user.moon);
-
-  const estimatedRwf = balance * MOON_VALUE_RWF;
-
-  const body = `
-    <h2>🌙 My MOONET Wallet</h2>
-
-    <div class="card">
-      <p>Available balance</p>
-
-      <h2>${balance.toLocaleString()} MOONS</h2>
-
-      <p>
-        Estimated value:
-        <strong>${estimatedRwf.toLocaleString()} RWF</strong>
-      </p>
-
-      <p class="muted">
-        The displayed value is an estimate, not a guarantee of payment.
-      </p>
-    </div>
-
-    <div class="card">
-      <h3>Manage your MOONS</h3>
-      <p><a href="/transactions">View transaction history</a></p>
-      <p><a href="/withdraw">Request withdrawal</a></p>
-      <p><a href="/offers">Explore offers</a></p>
-    </div>
-  `;
-
-  res.send(pageLayout('Wallet', body, user));
-});
-
-// ================================================
-// TRANSACTION HISTORY
-// ================================================
-
-app.get('/transactions', requireLogin, (req, res) => {
-  const user = getUserById(req.user.id);
-
-  const transactions = db.prepare(`
-    SELECT id, type, moon, description, reference, created_at
-    FROM transactions
-    WHERE user_id = ?
-    ORDER BY id DESC
-    LIMIT 200
-  `).all(user.id);
-
-  const rows = transactions.map((tx) => `
-    <tr>
-      <td>${Number(tx.id)}</td>
-      <td>${escapeHtml(tx.type)}</td>
-      <td>${escapeHtml(tx.description)}</td>
-      <td>${Number(tx.moon).toLocaleString()} MOONS</td>
-      <td>${escapeHtml(tx.reference || '')}</td>
-      <td>${escapeHtml(tx.created_at)}</td>
-    </tr>
-  `).join('');
-
-  const body = `
-    <h2>Transaction history</h2>
-
-    <p>
-      Current balance:
-      <strong>${Number(user.moon).toLocaleString()} MOONS</strong>
-    </p>
-
-    <div style="overflow-x:auto">
-      <table style="width:100%;text-align:left">
-        <thead>
-          <tr>
-            <th>ID</th>
-            <th>Type</th>
-            <th>Description</th>
-            <th>MOONS</th>
-            <th>Reference</th>
-            <th>Date</th>
-          </tr>
-        </thead>
-
-        <tbody>
-          ${rows || '<tr><td colspan="6">No transactions found.</td></tr>'}
-        </tbody>
-      </table>
-    </div>
-  `;
-
-  res.send(pageLayout('Transactions', body, user));
-});
-
-// ================================================
-// END OF PART 4
-// NEXT: PART 5 — VIDEOS, UPLOADS AND FEED
-// ================================================
-// ================================================
-// PART 5: VIDEO UPLOADS AND FEED
-// ================================================
-
-// Configure video uploads.
-const storage = multer.diskStorage({
-  destination: function (req, file, callback) {
-    callback(null, UPLOAD_DIR);
-  },
-
-  filename: function (req, file, callback) {
-    const extension = path.extname(file.originalname).toLowerCase();
-
-    const safeName =
-      Date.now() + '-' +
-      crypto.randomBytes(12).toString('hex') +
-      extension;
-
-    callback(null, safeName);
+  if (
+    !Number.isSafeInteger(followingId) ||
+    followingId <= 0
+  ) {
+    return res.status(400).send('Invalid user ID.');
   }
-});
 
-// Accept common video formats only.
-const videoUpload = multer({
-  storage,
+  if (followerId === followingId) {
+    return res.status(400).send(
+      'You cannot follow your own account.'
+    );
+  }
 
-  limits: {
-    fileSize: 100 * 1024 * 1024,
-    files: 1
-  },
+  const target = getUserById(followingId);
 
-  fileFilter: function (req, file, callback) {
-    const allowedExtensions = [
-      '.mp4',
-      '.webm',
-      '.mov',
-      '.m4v'
-    ];
+  if (!target) {
+    return res.status(404).send('User not found.');
+  }
 
-    const extension = path.extname(
-      file.originalname
-    ).toLowerCase();
+  try {
+    db.prepare(`
+      INSERT INTO follows (
+        follower_id,
+        following_id,
+        created_at
+      )
+      VALUES (?, ?, datetime('now'))
+    `).run(followerId, followingId);
 
-    if (!allowedExtensions.includes(extension)) {
-      return callback(
-        new Error('Unsupported video file format.')
-      );
+  } catch (error) {
+    if (String(error.message || '').toLowerCase().includes('unique')) {
+      return res.redirect('/feed');
     }
 
-    callback(null, true);
+    console.error('Follow error:', error);
+    return res.status(500).send('Unable to follow this user.');
   }
+
+  return res.redirect('/feed');
 });
 
-// ================================================
-// VIDEO FEED
-// ================================================
 
-app.get('/feed', requireLogin, (req, res) => {
-  const user = getUserById(req.user.id);
+// Unfollow a user
+app.post('/users/:id/unfollow', requireLogin, (req, res) => {
+  const followerId = Number(req.user.id);
+  const followingId = Number(req.params.id);
 
-  const videos = db.prepare(`
-    SELECT
-      videos.id,
-      videos.user_id,
-      videos.title,
-      videos.filename,
-      videos.created_at,
-      users.name AS creator_name
-    FROM videos
-    JOIN users ON users.id = videos.user_id
-    ORDER BY videos.id DESC
-    LIMIT 100
-  `).all();
+  if (
+    !Number.isSafeInteger(followingId) ||
+    followingId <= 0
+  ) {
+    return res.status(400).send('Invalid user ID.');
+  }
 
-  const videoCards = videos.map((video) => {
-    const filename = path.basename(video.filename);
+  db.prepare(`
+    DELETE FROM follows
+    WHERE follower_id = ?
+      AND following_id = ?
+  `).run(followerId, followingId);
 
-    return `
-      <div class="card">
-        <h3>${escapeHtml(video.title)}</h3>
-
-        <p>
-          By ${escapeHtml(video.creator_name)}
-        </p>
-
-        <video
-          controls
-          preload="metadata"
-          style="width:100%;max-height:500px;background:#111;border-radius:12px"
-        >
-          <source
-            src="/uploads/${encodeURIComponent(filename)}"
-            type="video/mp4"
-          >
-          Your browser does not support this video.
-        </video>
-
-        <p class="muted">
-          Posted ${escapeHtml(video.created_at)}
-        </p>
-
-        <p>
-          <a href="/videos/${Number(video.id)}">
-            Open video
-          </a>
-        </p>
-      </div>
-    `;
-  }).join('');
-
-  const body = `
-    <h2>🎬 MOONET Video Feed</h2>
-
-    <p>Discover videos shared by the community.</p>
-
-    <div class="card">
-      <h3>Upload a video</h3>
-
-      <form
-        action="/upload"
-        method="POST"
-        enctype="multipart/form-data"
-      >
-        <label>Video title</label>
-
-        <input
-          type="text"
-          name="title"
-          required
-          maxlength="120"
-        >
-
-        <label>Select video</label>
-
-        <input
-          type="file"
-          name="video"
-          accept="video/mp4,video/webm,video/quicktime"
-          required
-        >
-
-        <button type="submit">
-          Upload video
-        </button>
-      </form>
-
-      <p class="muted">
-        Maximum upload size: 100 MB.
-      </p>
-    </div>
-
-    <h3>Latest videos</h3>
-
-    ${videoCards || '<p>No videos available yet. Be the first to upload!</p>'}
-  `;
-
-  res.send(pageLayout('Video Feed', body, user));
+  return res.redirect('/feed');
 });
 
-// ================================================
-// UPLOAD VIDEO
-// ================================================
 
-app.post(
-  '/upload',
-  requireLogin,
-  (req, res, next) => {
-    videoUpload.single('video')(req, res, function (error) {
-      if (error) {
-        console.error('Video upload error:', error.message);
-
-        return res.status(400).send(
-          pageLayout(
-            'Upload error',
-            `<h2>Upload failed</h2><p>${escapeHtml(error.message)}</p><a href="/feed">Return to feed</a>`,
-            req.user
-          )
-        );
-      }
-
-      next();
-    });
-  },
-  (req, res) => {
-    try {
-      const title = String(
-        req.body.title || ''
-      ).trim();
-
-      if (!title || title.length > 120) {
-        if (req.file) {
-          fs.unlink(req.file.path, () => {});
-        }
-
-        return res.status(400).send(
-          'Video title must contain 1–120 characters.'
-        );
-      }
-
-      if (!req.file) {
-        return res.status(400).send(
-          'Please select a video file.'
-        );
-      }
-
-      const result = db.prepare(`
-        INSERT INTO videos (
-          user_id,
-          title,
-          filename
-        )
-        VALUES (?, ?, ?)
-      `).run(
-        req.user.id,
-        title,
-        req.file.filename
-      );
-
-      console.log(
-        'Video uploaded:',
-        Number(result.lastInsertRowid)
-      );
-
-      res.redirect('/feed');
-    } catch (error) {
-      console.error('Saving video failed:', error);
-
-      if (req.file) {
-        fs.unlink(req.file.path, () => {});
-      }
-
-      res.status(500).send(
-        'Could not save video. Please try again.'
-      );
-    }
-  }
-);
-
-// ================================================
-// VIDEO DETAILS
-// ================================================
-
-app.get('/videos/:id', requireLogin, (req, res) => {
+// View comments on a video
+app.get('/videos/:id/comments', requireLogin, (req, res) => {
   const videoId = Number(req.params.id);
 
   if (!Number.isSafeInteger(videoId) || videoId <= 0) {
@@ -1592,1857 +1749,1018 @@ app.get('/videos/:id', requireLogin, (req, res) => {
   }
 
   const video = db.prepare(`
-    SELECT
-      videos.*,
-      users.name AS creator_name
+    SELECT id, title
     FROM videos
-    JOIN users ON users.id = videos.user_id
-    WHERE videos.id = ?
+    WHERE id = ?
   `).get(videoId);
 
   if (!video) {
     return res.status(404).send('Video not found.');
   }
 
-  const filename = path.basename(video.filename);
+  const comments = db.prepare(`
+    SELECT
+      comments.id,
+      comments.comment,
+      comments.created_at,
+      users.name AS author_name
+    FROM comments
+    LEFT JOIN users ON users.id = comments.user_id
+    WHERE comments.video_id = ?
+    ORDER BY comments.id DESC
+    LIMIT 100
+  `).all(videoId);
+
+  const commentRows = comments.length
+    ? comments.map((item) => `
+        <article class="card">
+          <strong>${escapeHtml(item.author_name || 'MOONET user')}</strong>
+          <p>${escapeHtml(item.comment || '')}</p>
+          <small>${escapeHtml(item.created_at || '')}</small>
+        </article>
+      `).join('')
+    : '<p>No comments yet. Be the first to comment.</p>';
 
   const body = `
-    <h2>${escapeHtml(video.title)}</h2>
+    <section class="card">
+      <h2>Comments</h2>
+      <h3>${escapeHtml(video.title || 'Video')}</h3>
 
-    <p>
-      Created by ${escapeHtml(video.creator_name)}
-    </p>
+      <form method="POST" action="/videos/${videoId}/comments">
+        <label for="comment">Write a comment</label>
+        <textarea
+          id="comment"
+          name="comment"
+          maxlength="1000"
+          required
+        ></textarea>
 
-    <video
-      controls
-      preload="metadata"
-      style="width:100%;max-height:600px;background:#111;border-radius:12px"
-    >
-      <source
-        src="/uploads/${encodeURIComponent(filename)}"
-        type="video/mp4"
-      >
-      Your browser does not support this video.
-    </video>
+        <button type="submit">Post comment</button>
+      </form>
+    </section>
 
-    <p>
-      <a href="/feed">← Back to feed</a>
-    </p>
+    ${commentRows}
   `;
 
-  res.send(pageLayout('Video', body, req.user));
+  return res.send(
+    pageLayout('Video Comments', body, currentUser(req))
+  );
 });
 
-// ================================================
-// END OF PART 5
-// NEXT: PART 6 — LIKES, COMMENTS, FOLLOWS AND GIFTS
-// ================================================
-// ================================================
-// PART 6: LIKES, COMMENTS, FOLLOWS AND GIFTS
-// ================================================
 
-// ================================================
-// LIKE A VIDEO
-// ================================================
-
-app.post('/videos/:id/like', requireLogin, (req, res) => {
-  try {
-    const videoId = Number(req.params.id);
-
-    if (!Number.isSafeInteger(videoId) || videoId <= 0) {
-      return res.status(400).send('Invalid video ID.');
-    }
-
-    const video = db.prepare(`
-      SELECT id, user_id
-      FROM videos
-      WHERE id = ?
-    `).get(videoId);
-
-    if (!video) {
-      return res.status(404).send('Video not found.');
-    }
-
-    const existingLike = db.prepare(`
-      SELECT id
-      FROM like_history
-      WHERE user_id = ? AND video_id = ?
-    `).get(req.user.id, videoId);
-
-    if (existingLike) {
-      return res.redirect(`/videos/${videoId}`);
-    }
-
-    db.prepare(`
-      INSERT INTO like_history (user_id, video_id)
-      VALUES (?, ?)
-    `).run(req.user.id, videoId);
-
-    res.redirect(`/videos/${videoId}`);
-  } catch (error) {
-    console.error('Like error:', error);
-    res.status(500).send('Could not like this video.');
-  }
-});
-
-// ================================================
-// ADD A COMMENT
-// ================================================
-
+// Add a comment
 app.post('/videos/:id/comments', requireLogin, (req, res) => {
-  try {
-    const videoId = Number(req.params.id);
-    const comment = String(req.body.comment || '').trim();
+  const videoId = Number(req.params.id);
+  const comment = String(req.body.comment || '').trim();
 
-    if (!Number.isSafeInteger(videoId) || videoId <= 0) {
-      return res.status(400).send('Invalid video ID.');
-    }
-
-    if (!comment || comment.length > 1000) {
-      return res.status(400).send(
-        'Comment must contain between 1 and 1000 characters.'
-      );
-    }
-
-    const video = db.prepare(`
-      SELECT id
-      FROM videos
-      WHERE id = ?
-    `).get(videoId);
-
-    if (!video) {
-      return res.status(404).send('Video not found.');
-    }
-
-    db.prepare(`
-      INSERT INTO comments (video_id, user_id, comment)
-      VALUES (?, ?, ?)
-    `).run(videoId, req.user.id, comment);
-
-    res.redirect(`/videos/${videoId}`);
-  } catch (error) {
-    console.error('Comment error:', error);
-    res.status(500).send('Could not save your comment.');
-  }
-});
-
-// ================================================
-// FOLLOW A USER
-// ================================================
-
-app.post('/users/:id/follow', requireLogin, (req, res) => {
-  try {
-    const targetId = Number(req.params.id);
-
-    if (!Number.isSafeInteger(targetId) || targetId <= 0) {
-      return res.status(400).send('Invalid user ID.');
-    }
-
-    if (targetId === Number(req.user.id)) {
-      return res.status(400).send(
-        'You cannot follow your own account.'
-      );
-    }
-
-    const target = getUserById(targetId);
-
-    if (!target || Number(target.suspended) === 1) {
-      return res.status(404).send('User not found.');
-    }
-
-    db.prepare(`
-      INSERT OR IGNORE INTO follows (follower_id, following_id)
-      VALUES (?, ?)
-    `).run(req.user.id, targetId);
-
-    res.redirect('/feed');
-  } catch (error) {
-    console.error('Follow error:', error);
-    res.status(500).send('Could not follow this user.');
-  }
-});
-
-// ================================================
-// SEND MOONS AS A GIFT
-// ================================================
-
-app.get('/gifts', requireLogin, (req, res) => {
-  const body = `
-    <h2>🎁 Send MOONS</h2>
-
-    <p>
-      Share your MOONS with another MOONET user.
-    </p>
-
-    <form method="POST" action="/gifts">
-      <label>Recipient user ID</label>
-      <input
-        type="number"
-        name="receiver_id"
-        min="1"
-        required
-      >
-
-      <label>Amount in whole MOONS</label>
-      <input
-        type="number"
-        name="moon"
-        min="1"
-        step="1"
-        required
-      >
-
-      <label>Message (optional)</label>
-      <input
-        type="text"
-        name="message"
-        maxlength="250"
-      >
-
-      <button type="submit">Send gift</button>
-    </form>
-  `;
-
-  res.send(pageLayout('Send gifts', body, req.user));
-});
-
-app.post('/gifts', requireLogin, (req, res) => {
-  const receiverId = Number(req.body.receiver_id);
-  const amount = Number(req.body.moon);
-  const message = String(req.body.message || '').trim();
-
-  if (
-    !Number.isSafeInteger(receiverId) ||
-    receiverId <= 0 ||
-    !Number.isSafeInteger(amount) ||
-    amount <= 0 ||
-    amount > 100000000 ||
-    message.length > 250
-  ) {
-    return res.status(400).send('Invalid gift details.');
+  if (!Number.isSafeInteger(videoId) || videoId <= 0) {
+    return res.status(400).send('Invalid video ID.');
   }
 
-  if (receiverId === Number(req.user.id)) {
+  if (!comment || comment.length > 1000) {
     return res.status(400).send(
-      'You cannot send a gift to yourself.'
+      'Your comment must contain between 1 and 1000 characters.'
     );
   }
 
-  const transfer = db.prepare(`
-    UPDATE users
-    SET moon = moon - ?
+  const video = db.prepare(`
+    SELECT id
+    FROM videos
     WHERE id = ?
-      AND moon >= ?
-      AND suspended = 0
-  `);
+  `).get(videoId);
 
-  const credit = db.prepare(`
-    UPDATE users
-    SET moon = moon + ?
-    WHERE id = ?
-      AND suspended = 0
-  `);
-
-  try {
-    db.exec('BEGIN IMMEDIATE');
-
-    const receiver = getUserById(receiverId);
-
-    if (!receiver || Number(receiver.suspended) === 1) {
-      db.exec('ROLLBACK');
-      return res.status(404).send('Recipient not found.');
-    }
-
-    const senderUpdate = transfer.run(
-      amount,
-      req.user.id,
-      amount
-    );
-
-    if (Number(senderUpdate.changes) !== 1) {
-      db.exec('ROLLBACK');
-      return res.status(400).send(
-        'You do not have enough MOONS.'
-      );
-    }
-
-    const receiverUpdate = credit.run(amount, receiverId);
-
-    if (Number(receiverUpdate.changes) !== 1) {
-      db.exec('ROLLBACK');
-      return res.status(400).send(
-        'Could not credit the recipient.'
-      );
-    }
-
-    db.prepare(`
-      INSERT INTO gifts (
-        sender_id,
-        receiver_id,
-        moon,
-        message
-      )
-      VALUES (?, ?, ?, ?)
-    `).run(
-      req.user.id,
-      receiverId,
-      amount,
-      message
-    );
-
-    db.prepare(`
-      INSERT INTO transactions (
-        user_id,
-        type,
-        moon,
-        description,
-        reference
-      )
-      VALUES (?, 'gift_sent', ?, ?, ?)
-    `).run(
-      req.user.id,
-      -amount,
-      `Gift sent to user ${receiverId}`,
-      `gift-sent-${randomToken(16)}`
-    );
-
-    db.prepare(`
-      INSERT INTO transactions (
-        user_id,
-        type,
-        moon,
-        description,
-        reference
-      )
-      VALUES (?, 'gift_received', ?, ?, ?)
-    `).run(
-      receiverId,
-      amount,
-      `Gift received from user ${req.user.id}`,
-      `gift-received-${randomToken(16)}`
-    );
-
-    db.exec('COMMIT');
-
-    res.redirect('/wallet');
-  } catch (error) {
-    try {
-      db.exec('ROLLBACK');
-    } catch (_) {}
-
-    console.error('Gift transfer error:', error);
-
-    res.status(500).send(
-      'Gift transfer failed. Please try again.'
-    );
+  if (!video) {
+    return res.status(404).send('Video not found.');
   }
+
+  db.prepare(`
+    INSERT INTO comments (
+      user_id,
+      video_id,
+      comment,
+      created_at
+    )
+    VALUES (?, ?, ?, datetime('now'))
+  `).run(req.user.id, videoId, comment);
+
+  return res.redirect(`/videos/${videoId}/comments`);
 });
+// ============================================
+// PART 8: OFFERWALL AND MOONS REWARDS
+// ============================================
 
-// ================================================
-// END OF PART 6
-// NEXT: PART 7 — WATCH/LISTEN REWARDS AND WITHDRAWALS
-// ================================================
-// ================================================
-// PART 7: WATCH/LISTEN REWARDS AND WITHDRAWALS
-// ================================================
+// Read offerwall settings from environment variables.
+// Never place private API keys or secrets directly in this file.
+const OFFERWALL_REWARD_SECRET =
+  String(process.env.OFFERWALL_REWARD_SECRET || '').trim();
 
-// Use database transactions for atomic balance updates.
-function runInTransaction(work) {
-  db.exec('BEGIN IMMEDIATE');
+const OFFERWALL_MOONS_PER_DOLLAR = 100;
 
-  try {
-    const result = work();
-    db.exec('COMMIT');
-    return result;
-  } catch (error) {
-    try {
-      db.exec('ROLLBACK');
-    } catch (_) {}
-
-    throw error;
-  }
-}
-
-// ================================================
-// START WATCH SESSION
-// ================================================
-
-app.post('/videos/:id/watch/start', requireLogin, (req, res) => {
-  try {
-    const videoId = Number(req.params.id);
-
-    if (!Number.isSafeInteger(videoId) || videoId <= 0) {
-      return res.status(400).json({
-        ok: false,
-        error: 'Invalid video ID.'
-      });
-    }
-
-    const video = db.prepare(`
-      SELECT id
-      FROM videos
-      WHERE id = ?
-    `).get(videoId);
-
-    if (!video) {
-      return res.status(404).json({
-        ok: false,
-        error: 'Video not found.'
-      });
-    }
-
-    const result = db.prepare(`
-      INSERT INTO watch_sessions (
-        user_id,
-        video_id
-      )
-      VALUES (?, ?)
-    `).run(req.user.id, videoId);
-
-    res.json({
-      ok: true,
-      sessionId: Number(result.lastInsertRowid),
-      requiredSeconds: STREAM_DURATION_MS / 1000
-    });
-  } catch (error) {
-    console.error('Start watch session error:', error);
-
-    res.status(500).json({
-      ok: false,
-      error: 'Could not start watch session.'
-    });
-  }
-});
-
-// ================================================
-// COMPLETE WATCH SESSION
-// ================================================
-
-app.post('/watch/complete', requireLogin, (req, res) => {
-  try {
-    const sessionId = Number(req.body.sessionId);
-
-    if (!Number.isSafeInteger(sessionId) || sessionId <= 0) {
-      return res.status(400).json({
-        ok: false,
-        error: 'Invalid session.'
-      });
-    }
-
-    const result = runInTransaction(() => {
-      const watchSession = db.prepare(`
-        SELECT *
-        FROM watch_sessions
-        WHERE id = ?
-          AND user_id = ?
-      `).get(sessionId, req.user.id);
-
-      if (!watchSession) {
-        throw new Error('SESSION_NOT_FOUND');
-      }
-
-      if (Number(watchSession.rewarded) === 1) {
-        throw new Error('ALREADY_REWARDED');
-      }
-
-      // Do not trust a completion timestamp supplied by the browser.
-      // The server-side session creation time is used.
-      const startedAt = Date.parse(
-        watchSession.started_at.replace(' ', 'T') + 'Z'
-      );
-
-      if (
-        !Number.isFinite(startedAt) ||
-        Date.now() - startedAt < STREAM_DURATION_MS
-      ) {
-        throw new Error('WATCH_TOO_SHORT');
-      }
-
-      // Stored balances are INTEGER, so this reward is rounded
-      // to whole MOONS. A fractional reward needs a separate
-      // design before it can safely be credited.
-      const reward = Math.round(STREAM_REWARD_MOON);
-
-      if (reward <= 0) {
-        throw new Error('INVALID_REWARD');
-      }
-
-      db.prepare(`
-        UPDATE users
-        SET moon = moon + ?,
-            watch_moon = watch_moon + ?
-        WHERE id = ?
-          AND suspended = 0
-      `).run(reward, reward, req.user.id);
-
-      db.prepare(`
-        UPDATE watch_sessions
-        SET rewarded = 1,
-            completed_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-          AND user_id = ?
-          AND rewarded = 0
-      `).run(sessionId, req.user.id);
-
-      db.prepare(`
-        INSERT INTO transactions (
-          user_id,
-          type,
-          moon,
-          description,
-          reference
-        )
-        VALUES (?, 'watch_reward', ?, ?, ?)
-      `).run(
-        req.user.id,
-        reward,
-        'MOONET watch reward',
-        `watch-${sessionId}`
-      );
-
-      return reward;
-    });
-
-    res.json({
-      ok: true,
-      reward: result,
-      currency: 'MOONS'
-    });
-  } catch (error) {
-    if (error.message === 'SESSION_NOT_FOUND') {
-      return res.status(404).json({
-        ok: false,
-        error: 'Watch session not found.'
-      });
-    }
-
-    if (error.message === 'ALREADY_REWARDED') {
-      return res.status(409).json({
-        ok: false,
-        error: 'This session was already rewarded.'
-      });
-    }
-
-    if (error.message === 'WATCH_TOO_SHORT') {
-      return res.status(400).json({
-        ok: false,
-        error: 'Watch for at least 30 seconds.'
-      });
-    }
-
-    console.error('Complete watch session error:', error);
-
-    res.status(500).json({
-      ok: false,
-      error: 'Could not complete watch session.'
-    });
-  }
-});
-
-// ================================================
-// WITHDRAWAL PAGE
-// ================================================
-
-app.get('/withdraw', requireLogin, (req, res) => {
+// Offerwall page
+app.get('/offers', requireLogin, (req, res) => {
   const user = getUserById(req.user.id);
 
   const body = `
-    <h2>Withdraw MOONS</h2>
+    <section class="card">
+      <h2>Earn MOONS 🌙</h2>
+      <p>Complete eligible offers to earn MOONS.</p>
+      <p>Your current balance:
+        <strong>${escapeHtml(formatMoons(user.moon))}</strong>
+      </p>
+    </section>
 
-    <div class="card">
-      <p>Available balance</p>
-      <h3>${Number(user.moon).toLocaleString()} MOONS</h3>
-      <p>Minimum request: ${MIN_WITHDRAWAL_MOON} MOONS</p>
-    </div>
+    <section class="card">
+      <h3>Available offers</h3>
+      <p>Offer availability depends on your location and the provider.</p>
 
-    <form method="POST" action="/withdraw">
-      <label>Amount in whole MOONS</label>
+      <p>
+        Complete an offer honestly and wait for the provider
+        to confirm your reward.
+      </p>
 
-      <input
-        type="number"
-        name="moon"
-        min="${MIN_WITHDRAWAL_MOON}"
-        step="1"
-        required
-      >
-
-      <label>Payment method</label>
-
-      <select name="method" required>
-        <option value="MTN MoMo">MTN Mobile Money</option>
-        <option value="Bank">Bank transfer</option>
-      </select>
-
-      <label>Phone number or account details</label>
-
-      <input
-        type="text"
-        name="phone"
-        maxlength="100"
-        required
-      >
-
-      <button type="submit">Submit withdrawal request</button>
-    </form>
-
-    <p class="muted">
-      Submitting a request does not guarantee immediate payment.
-      Requests are subject to review and approval.
-    </p>
+      <p>
+        If the Offerwall provider supplies an official embed code,
+        it should be integrated here after its documentation and
+        security requirements have been checked.
+      </p>
+    </section>
   `;
 
-  res.send(pageLayout('Withdraw', body, user));
+  return res.send(pageLayout('Earn MOONS', body, user));
 });
 
-// ================================================
-// CREATE WITHDRAWAL REQUEST
-// ================================================
 
-app.post('/withdraw', requireLogin, (req, res) => {
-  const amount = Number(req.body.moon);
-  const method = String(req.body.method || '').trim();
-  const phone = String(req.body.phone || '').trim();
-
-  const allowedMethods = ['MTN MoMo', 'Bank'];
-
-  if (
-    !Number.isSafeInteger(amount) ||
-    amount < MIN_WITHDRAWAL_MOON ||
-    phone.length < 5 ||
-    phone.length > 100 ||
-    !allowedMethods.includes(method)
-  ) {
-    return res.status(400).send(
-      'Withdrawal details are invalid.'
-    );
+// Offerwall reward callback.
+// The exact callback format must be confirmed with your provider.
+app.get('/offerwall/callback', (req, res) => {
+  if (!OFFERWALL_REWARD_SECRET) {
+    return res.status(503).send('Offerwall callback is not configured.');
   }
 
-  try {
-    runInTransaction(() => {
-      const debit = db.prepare(`
-        UPDATE users
-        SET moon = moon - ?
-        WHERE id = ?
-          AND moon >= ?
-          AND suspended = 0
-      `).run(amount, req.user.id, amount);
+  /*
+    SECURITY WARNING:
+    Do not credit a reward based only on user_id, amount,
+    or transaction_id supplied by an incoming URL.
 
-      if (Number(debit.changes) !== 1) {
-        throw new Error('INSUFFICIENT_BALANCE');
-      }
+    Before activating this endpoint, confirm the provider's
+    official signature algorithm, required parameters, and
+    transaction verification procedure.
 
-      const amountRwf = amount * MOON_VALUE_RWF;
+    This placeholder deliberately does not credit MOONS.
+  */
 
-      const withdrawal = db.prepare(`
-        INSERT INTO withdrawals (
-          user_id,
-          moon,
-          amount_rwf,
-          method,
-          phone,
-          status
-        )
-        VALUES (?, ?, ?, ?, ?, 'pending')
-      `).run(
-        req.user.id,
-        amount,
-        amountRwf,
-        method,
-        phone
-      );
+  return res.status(501).send(
+    'Offerwall callback requires provider-specific signature verification.'
+  );
+});
+// ============================================
+// PART 9: VIDEO UPLOADS, REVENUE AND EXPENSES
+// ============================================
 
-      db.prepare(`
-        INSERT INTO transactions (
-          user_id,
-          type,
-          moon,
-          description,
-          reference
-        )
-        VALUES (?, 'withdrawal_request', ?, ?, ?)
-      `).run(
-        req.user.id,
-        -amount,
-        `Withdrawal request #${Number(withdrawal.lastInsertRowid)}`,
-        `withdrawal-${Number(withdrawal.lastInsertRowid)}`
-      );
-    });
+// Configure video uploads.
+// UPLOAD_DIR should already be defined in Part 1.
 
-    res.redirect('/transactions');
-  } catch (error) {
-    if (error.message === 'INSUFFICIENT_BALANCE') {
-      return res.status(400).send(
-        'You do not have enough MOONS.'
+const videoStorage = multer.diskStorage({
+  destination: (req, file, callback) => {
+    callback(null, UPLOAD_DIR);
+  },
+
+  filename: (req, file, callback) => {
+    const extension = path.extname(file.originalname).toLowerCase();
+
+    const allowedExtensions = [
+      '.mp4',
+      '.webm',
+      '.mov',
+      '.mp3',
+      '.wav',
+      '.ogg'
+    ];
+
+    if (!allowedExtensions.includes(extension)) {
+      return callback(new Error('Unsupported file extension.'));
+    }
+
+    const filename =
+      `${Date.now()}-${crypto.randomBytes(12).toString('hex')}${extension}`;
+
+    callback(null, filename);
+  }
+});
+
+const videoUpload = multer({
+  storage: videoStorage,
+
+  limits: {
+    fileSize: 100 * 1024 * 1024,
+    files: 1
+  },
+
+  fileFilter: (req, file, callback) => {
+    const allowedMimeTypes = [
+      'video/mp4',
+      'video/webm',
+      'video/quicktime',
+      'audio/mpeg',
+      'audio/mp3',
+      'audio/wav',
+      'audio/ogg',
+      'audio/webm'
+    ];
+
+    if (!allowedMimeTypes.includes(file.mimetype)) {
+      return callback(
+        new Error('Unsupported video or audio format.')
       );
     }
 
-    console.error('Withdrawal request error:', error);
-
-    res.status(500).send(
-      'Could not submit withdrawal request.'
-    );
+    callback(null, true);
   }
 });
 
-// ================================================
-// END OF PART 7
-// NEXT: PART 8 — OFFERWALL.ME INTEGRATION
-// ================================================
-// ================================================
-// PART 8A: OFFERWALL PAGE AND SIGNED USER IDENTITY
-// ================================================
 
-app.get('/offers', requireLogin, (req, res) => {
-  if (
-    !OFFERWALL_PUBLIC_API_KEY ||
-    !OFFERWALL_IDENTITY_SECRET
-  ) {
-    return res.status(503).send(
-      pageLayout(
-        'Offers',
-        `
-          <h2>MOONET Offers</h2>
-          <p>Offerwall is being configured. Please try again later.</p>
-          <a href="/dashboard">Return to dashboard</a>
-        `,
-        req.user
-      )
-    );
-  }
-
-  // Use the authenticated user's database ID.
-  // Never accept an arbitrary user ID from the browser.
-  const userId = String(req.user.id);
-
-  // Signature expires after one hour.
-  const expiry = Math.floor(Date.now() / 1000) + 3600;
-
-  const message = [
-    'offerwall-user-v1',
-    OFFERWALL_PUBLIC_API_KEY,
-    userId,
-    String(expiry)
-  ].join('\n');
-
-  const signature = crypto
-    .createHmac('sha256', OFFERWALL_IDENTITY_SECRET)
-    .update(message, 'utf8')
-    .digest('hex');
-
-  const wallUrl = new URL(
-    `https://offerwall.me/offerwall/${encodeURIComponent(
-      OFFERWALL_PUBLIC_API_KEY
-    )}/${encodeURIComponent(userId)}`
-  );
-
-  wallUrl.searchParams.set(
-    'identityExpires',
-    String(expiry)
-  );
-
-  wallUrl.searchParams.set(
-    'identitySignature',
-    signature
-  );
+// Video upload page
+app.get('/upload', requireLogin, (req, res) => {
+  const user = getUserById(req.user.id);
 
   const body = `
-    <h2>🌙 Earn MOONS with Offers</h2>
+    <section class="card">
+      <h2>Upload a Video 🎬</h2>
 
-    <p>
-      Complete eligible offers through our offer partner.
-      Rewards are credited after the partner confirms completion.
-    </p>
+      <p>Share your creativity with the MOONET community.</p>
 
-    <div class="card">
-      <p><strong>Your MOONET user ID:</strong> ${escapeHtml(userId)}</p>
-
-      <a
-        href="${escapeHtml(wallUrl.toString())}"
-        target="_blank"
-        rel="noopener noreferrer"
+      <form
+        method="POST"
+        action="/upload"
+        enctype="multipart/form-data"
       >
-        <button type="button">Open Offers</button>
-      </a>
-    </div>
+        <label for="title">Video title</label>
+        <input
+          id="title"
+          name="title"
+          type="text"
+          maxlength="150"
+          required
+        >
 
-    <p>
-      <a href="/transactions">View your transaction history</a>
-    </p>
+        <label for="description">Description</label>
+        <textarea
+          id="description"
+          name="description"
+          maxlength="2000"
+        ></textarea>
+
+        <label for="media">Choose video or audio</label>
+        <input
+          id="media"
+          name="media"
+          type="file"
+          accept="video/mp4,video/webm,video/quicktime,audio/mpeg,audio/wav,audio/ogg"
+          required
+        >
+
+        <button type="submit">Upload</button>
+      </form>
+    </section>
   `;
 
-  res.send(pageLayout('Earn MOONS', body, req.user));
+  return res.send(pageLayout('Upload Video', body, user));
 });
-// ================================================
-// PART 8B: OFFERWALL.ME POSTBACK
-// ================================================
 
-app.get('/offerwall/callback', (req, res) => {
-  if (!OFFERWALL_POSTBACK_SECRET) {
-    console.error('Offerwall postback secret is not configured.');
 
-    return res.status(503).send('not_configured');
-  }
+// Process upload
+app.post(
+  '/upload',
+  requireLogin,
+  (req, res, next) => {
+    videoUpload.single('media')(req, res, (error) => {
+      if (error) {
+        console.error('Upload error:', error.message);
 
-  try {
-    const {
-      subId,
-      transId,
-      reward,
-      status,
-      signature
-    } = req.query;
-
-    if (
-      typeof subId !== 'string' ||
-      typeof transId !== 'string' ||
-      typeof reward !== 'string' ||
-      typeof status !== 'string' ||
-      typeof signature !== 'string'
-    ) {
-      return res.status(400).send('invalid_parameters');
-    }
-
-    if (
-      !/^\d+$/.test(subId) ||
-      transId.length < 1 ||
-      transId.length > 200 ||
-      !/^\d+$/.test(status) ||
-      !/^[a-fA-F0-9]{32}$/.test(signature)
-    ) {
-      return res.status(400).send('invalid_parameters');
-    }
-
-    const rewardValue = Number(reward);
-
-    if (
-      !Number.isFinite(rewardValue) ||
-      rewardValue <= 0
-    ) {
-      return res.status(400).send('invalid_reward');
-    }
-
-    // Offerwall.me signature:
-    // MD5(subId + transId + reward + secret)
-    // No separators are added.
-    const expectedSignature = crypto
-      .createHash('md5')
-      .update(
-        subId + transId + reward + OFFERWALL_POSTBACK_SECRET,
-        'utf8'
-      )
-      .digest('hex');
-
-    if (!safeEqualText(
-      expectedSignature.toLowerCase(),
-      signature.toLowerCase()
-    )) {
-      console.warn('Invalid Offerwall callback signature.');
-
-      return res.status(403).send('invalid_signature');
-    }
-
-    // Status 2 represents a reversal/chargeback.
-    // Never credit it as a new reward.
-    if (status === '2') {
-      console.warn(
-        'Offerwall reversal received for transaction:',
-        transId
-      );
-
-      // Reversal accounting must be handled separately.
-      // A reversal must not be mistaken for a new credit.
-      return res.status(200).send('ok');
-    }
-
-    if (status !== '1') {
-      return res.status(400).send('unsupported_status');
-    }
-
-    const userId = Number(subId);
-
-    if (!Number.isSafeInteger(userId) || userId <= 0) {
-      return res.status(400).send('invalid_user');
-    }
-
-    const user = getUserById(userId);
-
-    if (!user || Number(user.suspended) === 1) {
-      return res.status(404).send('user_not_found');
-    }
-
-    // The database currently stores MOONS as INTEGER.
-    // A provider reward must be mapped to whole MOONS using
-    // the exact conversion agreed with the Offerwall settings.
-    //
-    // Do not assume provider USD payout equals user MOONS.
-    // Configure this mapping before enabling real credits.
-    const moonsToCredit = Math.floor(rewardValue);
-
-    if (moonsToCredit <= 0) {
-      console.warn(
-        'Offerwall reward is below one whole MOON:',
-        transId
-      );
-
-      return res.status(400).send('reward_below_minimum');
-    }
-
-    runInTransaction(() => {
-      const duplicate = db.prepare(`
-        SELECT id
-        FROM offerwall_events
-        WHERE transaction_id = ?
-      `).get(transId);
-
-      if (duplicate) {
-        return;
+        return res.status(400).send(
+          'Upload failed. Check the file format and maximum file size.'
+        );
       }
 
-      // Store the event and credit the balance atomically.
-      db.prepare(`
-        INSERT INTO offerwall_events (
-          transaction_id,
-          user_id,
-          reward
-        )
-        VALUES (?, ?, ?)
-      `).run(transId, userId, rewardValue);
-
-      const update = db.prepare(`
-        UPDATE users
-        SET moon = moon + ?
-        WHERE id = ?
-          AND suspended = 0
-      `).run(moonsToCredit, userId);
-
-      if (Number(update.changes) !== 1) {
-        throw new Error('USER_CREDIT_FAILED');
-      }
-
-      db.prepare(`
-        INSERT INTO transactions (
-          user_id,
-          type,
-          moon,
-          description,
-          reference
-        )
-        VALUES (?, 'offerwall_reward', ?, ?, ?)
-      `).run(
-        userId,
-        moonsToCredit,
-        'Offerwall.me reward',
-        `offerwall:${transId}`
-      );
+      next();
     });
+  },
+  (req, res) => {
+    if (!req.file) {
+      return res.status(400).send('Please select a video or audio file.');
+    }
 
-    return res.status(200).send('ok');
-  } catch (error) {
-    // A failed transaction should be retried by the provider.
-    console.error('Offerwall callback error:', error);
+    const title = String(req.body.title || '').trim();
+    const description = String(req.body.description || '').trim();
 
-    return res.status(500).send('processing_failed');
+    if (!title || title.length > 150 || description.length > 2000) {
+      fs.unlink(req.file.path, () => {});
+
+      return res.status(400).send('Invalid title or description.');
+    }
+
+    const extension = path.extname(req.file.filename).toLowerCase();
+
+    const mediaType = [
+      '.mp3',
+      '.wav',
+      '.ogg'
+    ].includes(extension)
+      ? 'audio'
+      : 'video';
+
+    try {
+      /*
+        Verify the existing videos schema before using this INSERT.
+        It assumes the table has:
+        user_id, title, description, file_path, media_type, created_at.
+      */
+
+      db.prepare(`
+        INSERT INTO videos (
+          user_id,
+          title,
+          description,
+          file_path,
+          media_type,
+          created_at
+        )
+        VALUES (?, ?, ?, ?, ?, datetime('now'))
+      `).run(
+        req.user.id,
+        title,
+        description,
+        `/uploads/${req.file.filename}`,
+        mediaType
+      );
+
+      return res.redirect('/feed');
+
+    } catch (error) {
+      fs.unlink(req.file.path, () => {});
+
+      console.error('Saving video error:', error);
+
+      return res.status(500).send(
+        'The video could not be saved. Please try again.'
+      );
+    }
   }
-});
-// ============================================
-// MOONET — PART 9A: ADMIN DASHBOARD
-// ============================================
+);
 
-app.get('/admin/dashboard', requireAdmin, (req, res) => {
-  try {
-    const totalUsers = db.prepare(`
-      SELECT COUNT(*) AS total
-      FROM users
-    `).get().total;
 
-    const totalVideos = db.prepare(`
-      SELECT COUNT(*) AS total
-      FROM videos
-    `).get().total;
-
-    const pendingWithdrawals = db.prepare(`
-      SELECT COUNT(*) AS total
-      FROM withdrawals
-      WHERE LOWER(status) = 'pending'
-    `).get().total;
-
-    const totalMoons = db.prepare(`
-      SELECT COALESCE(SUM(moon), 0) AS total
-      FROM users
-    `).get().total;
-
-    const totalRevenue = db.prepare(`
-      SELECT COALESCE(SUM(amount), 0) AS total
-      FROM revenue
-    `).get().total;
-
-    const totalExpenses = db.prepare(`
-      SELECT COALESCE(SUM(amount), 0) AS total
-      FROM expenses
-    `).get().total;
-
-    const recentUsers = db.prepare(`
-      SELECT id, name, email, moon, created_at
-      FROM users
-      ORDER BY id DESC
-      LIMIT 10
-    `).all();
-
-    const recentWithdrawals = db.prepare(`
-      SELECT *
-      FROM withdrawals
-      ORDER BY id DESC
-      LIMIT 10
-    `).all();
-
-    const money = value =>
-      Number(value || 0).toLocaleString('en-US', {
-        maximumFractionDigits: 2
-      });
-
-    const escapeHtml = value =>
-      String(value ?? '').replace(/[&<>"']/g, ch => ({
-        '&': '&amp;',
-        '<': '&lt;',
-        '>': '&gt;',
-        '"': '&quot;',
-        "'": '&#39;'
-      })[ch]);
-
-    const usersRows = recentUsers.map(user => `
-      <tr>
-        <td>${escapeHtml(user.id)}</td>
-        <td>${escapeHtml(user.name)}</td>
-        <td>${escapeHtml(user.email)}</td>
-        <td>${money(user.moon)} MOONS</td>
-        <td>${escapeHtml(user.created_at)}</td>
-      </tr>
-    `).join('');
-
-    const withdrawalRows = recentWithdrawals.map(item => `
-      <tr>
-        <td>${escapeHtml(item.id)}</td>
-        <td>${escapeHtml(item.user_id)}</td>
-        <td>${escapeHtml(item.amount)}</td>
-        <td>${escapeHtml(item.status)}</td>
-      </tr>
-    `).join('');
-
-    res.send(pageLayout('Admin Dashboard', `
-      <main class="container">
-        <h1>🌙 MOONET Admin Dashboard</h1>
-
-        <div class="grid">
-          <section class="card">
-            <h3>👥 Abakoresha</h3>
-            <h2>${money(totalUsers)}</h2>
-          </section>
-
-          <section class="card">
-            <h3>🎬 Videos</h3>
-            <h2>${money(totalVideos)}</h2>
-          </section>
-
-          <section class="card">
-            <h3>💸 Pending Withdrawals</h3>
-            <h2>${money(pendingWithdrawals)}</h2>
-          </section>
-
-          <section class="card">
-            <h3>🌙 MOONS z'abakoresha</h3>
-            <h2>${money(totalMoons)}</h2>
-          </section>
-
-          <section class="card">
-            <h3>💰 Revenue</h3>
-            <h2>${money(totalRevenue)}</h2>
-          </section>
-
-          <section class="card">
-            <h3>📉 Expenses</h3>
-            <h2>${money(totalExpenses)}</h2>
-          </section>
-
-          <section class="card">
-            <h3>📊 Revenue minus expenses</h3>
-            <h2>${money(totalRevenue - totalExpenses)}</h2>
-          </section>
-        </div>
-
-        <h2>👥 Abakoresha baheruka kwiyandikisha</h2>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Amazina</th>
-                <th>Email</th>
-                <th>MOONS</th>
-                <th>Itariki</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${usersRows || '<tr><td colspan="5">Nta bakoresha babonetse.</td></tr>'}
-            </tbody>
-          </table>
-        </div>
-
-        <h2>💸 Withdrawals ziheruka</h2>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>User ID</th>
-                <th>Amount</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${withdrawalRows || '<tr><td colspan="4">Nta withdrawals ziraboneka.</td></tr>'}
-            </tbody>
-          </table>
-        </div>
-      </main>
-
-      <style>
-        .container {
-          max-width: 1100px;
-          margin: 24px auto;
-          padding: 16px;
-        }
-
-        .grid {
-          display: grid;
-          grid-template-columns: repeat(
-            auto-fit,
-            minmax(190px, 1fr)
-          );
-          gap: 16px;
-        }
-
-        .card {
-          padding: 20px;
-          border-radius: 14px;
-          background: #f0fff4;
-          border: 1px solid #b7ebc6;
-          overflow-wrap: anywhere;
-        }
-
-        .card h2 {
-          color: #078447;
-        }
-
-        .table-wrap {
-          width: 100%;
-          overflow-x: auto;
-          margin-bottom: 28px;
-        }
-
-        table {
-          width: 100%;
-          border-collapse: collapse;
-          min-width: 600px;
-        }
-
-        th, td {
-          padding: 12px;
-          border-bottom: 1px solid #ddd;
-          text-align: left;
-        }
-
-        th {
-          background: #087f46;
-          color: white;
-        }
-      </style>
-    `));
-  } catch (error) {
-    console.error('MOONET Admin Dashboard error:', error);
-    res.status(500).send(
-      'Admin Dashboard ntiyashoboye gufunguka. Reba server logs.'
-    );
-  }
-});
-// ============================================
-// MOONET — PART 9B: ADMIN WITHDRAWALS
-// ============================================
-
-// Reba ubusabe bwose bwo kubikuza
-app.get('/admin/withdrawals', requireAdmin, (req, res) => {
-  try {
-    const withdrawals = db.prepare(`
-      SELECT
-        w.*,
-        u.name AS user_name,
-        u.email AS user_email
-      FROM withdrawals w
-      LEFT JOIN users u ON u.id = w.user_id
-      ORDER BY w.id DESC
-      LIMIT 200
-    `).all();
-
-    const escapeHtml = value =>
-      String(value ?? '').replace(/[&<>"']/g, ch => ({
-        '&': '&amp;',
-        '<': '&lt;',
-        '>': '&gt;',
-        '"': '&quot;',
-        "'": '&#39;'
-      })[ch]);
-
-    const rows = withdrawals.map(w => `
-      <tr>
-        <td>${escapeHtml(w.id)}</td>
-        <td>${escapeHtml(w.user_name)}</td>
-        <td>${escapeHtml(w.user_email)}</td>
-        <td>${escapeHtml(w.amount)}</td>
-        <td>${escapeHtml(w.status)}</td>
-        <td>${escapeHtml(w.created_at)}</td>
-      </tr>
-    `).join('');
-
-    res.send(pageLayout('MOONET Withdrawals', `
-      <main style="max-width:1100px;margin:25px auto;padding:16px">
-        <h1>💸 MOONET Withdrawals</h1>
-
-        <p>
-          Hano ureba ubusabe bwo kubikuza MOONS.
-          Kwemeza cyangwa kwanga ubusabe bizongerwamo
-          nyuma yo kugenzura uburyo amafaranga abikwa.
-        </p>
-
-        <div style="overflow-x:auto">
-          <table style="
-            width:100%;
-            border-collapse:collapse;
-            min-width:650px
-          ">
-            <thead>
-              <tr style="background:#087f46;color:white">
-                <th>ID</th>
-                <th>Umukoresha</th>
-                <th>Email</th>
-                <th>Amount</th>
-                <th>Status</th>
-                <th>Itariki</th>
-              </tr>
-            </thead>
-
-            <tbody>
-              ${rows || `
-                <tr>
-                  <td colspan="6">
-                    Nta busabe bwo kubikuza buraboneka.
-                  </td>
-                </tr>
-              `}
-            </tbody>
-          </table>
-        </div>
-      </main>
-
-      <style>
-        th,td {
-          padding:12px;
-          border-bottom:1px solid #ddd;
-          text-align:left;
-        }
-      </style>
-    `));
-  } catch (error) {
-    console.error('MOONET withdrawals error:', error);
-
-    res.status(500).send(
-      'Ntibyashobotse kubona withdrawals. Reba server logs.'
-    );
-  }
-});
-// ============================================
-// MOONET — PART 9C: REVENUE & EXPENSES
-// ============================================
-
-// ADMIN: Reba amafaranga yinjiye n'ayasohotse
+// Admin: financial summary
 app.get('/admin/finances', requireAdmin, (req, res) => {
+  const revenueSummary = db.prepare(`
+    SELECT COALESCE(SUM(amount), 0) AS total
+    FROM revenue
+  `).get();
+
+  const expenseSummary = db.prepare(`
+    SELECT COALESCE(SUM(amount), 0) AS total
+    FROM expenses
+  `).get();
+
+  const totalRevenue = Number(revenueSummary.total || 0);
+  const totalExpenses = Number(expenseSummary.total || 0);
+
+  const body = `
+    <section class="card">
+      <h2>MOONET Financial Summary</h2>
+
+      <p>Total recorded revenue:
+        <strong>${escapeHtml(totalRevenue.toLocaleString('en-US'))}</strong>
+      </p>
+
+      <p>Total recorded expenses:
+        <strong>${escapeHtml(totalExpenses.toLocaleString('en-US'))}</strong>
+      </p>
+
+      <p>Recorded difference:
+        <strong>${escapeHtml(
+          (totalRevenue - totalExpenses).toLocaleString('en-US')
+        )}</strong>
+      </p>
+
+      <p>
+        These totals reflect database records only. They do not
+        independently confirm that money has been received or paid.
+      </p>
+    </section>
+  `;
+
+  return res.send(
+    pageLayout('Financial Summary', body, req.user)
+  );
+});
+
+
+// Admin: record revenue
+app.post('/admin/revenue', requireAdmin, (req, res) => {
+  const source = String(req.body.source || '').trim();
+  const amount = Number(req.body.amount);
+
+  if (
+    !source ||
+    source.length > 150 ||
+    !Number.isFinite(amount) ||
+    amount <= 0 ||
+    amount > 1_000_000_000
+  ) {
+    return res.status(400).send('Invalid revenue details.');
+  }
+
   try {
-    const revenue = db.prepare(`
-      SELECT *
-      FROM revenue
-      ORDER BY id DESC
-      LIMIT 100
-    `).all();
+    db.prepare(`
+      INSERT INTO revenue (source, amount, created_at)
+      VALUES (?, ?, datetime('now'))
+    `).run(source, amount);
 
-    const expenses = db.prepare(`
-      SELECT *
-      FROM expenses
-      ORDER BY id DESC
-      LIMIT 100
-    `).all();
-
-    const totalRevenue = Number(
-      db.prepare(`
-        SELECT COALESCE(SUM(amount), 0) AS total
-        FROM revenue
-      `).get().total
-    );
-
-    const totalExpenses = Number(
-      db.prepare(`
-        SELECT COALESCE(SUM(amount), 0) AS total
-        FROM expenses
-      `).get().total
-    );
-
-    const escapeHtml = value =>
-      String(value ?? '').replace(/[&<>"']/g, ch => ({
-        '&': '&amp;',
-        '<': '&lt;',
-        '>': '&gt;',
-        '"': '&quot;',
-        "'": '&#39;'
-      })[ch]);
-
-    const formatMoney = value =>
-      Number(value || 0).toLocaleString('en-US', {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2
-      });
-
-    const revenueRows = revenue.map(item => `
-      <tr>
-        <td>${escapeHtml(item.id)}</td>
-        <td>${escapeHtml(item.description)}</td>
-        <td>${formatMoney(item.amount)}</td>
-        <td>${escapeHtml(item.created_at)}</td>
-      </tr>
-    `).join('');
-
-    const expenseRows = expenses.map(item => `
-      <tr>
-        <td>${escapeHtml(item.id)}</td>
-        <td>${escapeHtml(item.description)}</td>
-        <td>${formatMoney(item.amount)}</td>
-        <td>${escapeHtml(item.created_at)}</td>
-      </tr>
-    `).join('');
-
-    res.send(pageLayout('MOONET Finances', `
-      <main class="finance-container">
-        <h1>💰 MOONET Financial Dashboard</h1>
-
-        <section class="finance-cards">
-          <div class="finance-card">
-            <h3>Total Revenue</h3>
-            <h2>${formatMoney(totalRevenue)}</h2>
-          </div>
-
-          <div class="finance-card">
-            <h3>Total Expenses</h3>
-            <h2>${formatMoney(totalExpenses)}</h2>
-          </div>
-
-          <div class="finance-card">
-            <h3>Net Balance</h3>
-            <h2>${formatMoney(totalRevenue - totalExpenses)}</h2>
-          </div>
-        </section>
-
-        <h2>📈 Revenue Records</h2>
-
-        <div class="finance-table">
-          <table>
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Description</th>
-                <th>Amount</th>
-                <th>Date</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${revenueRows || `
-                <tr><td colspan="4">Nta revenue records ziraboneka.</td></tr>
-              `}
-            </tbody>
-          </table>
-        </div>
-
-        <h2>📉 Expense Records</h2>
-
-        <div class="finance-table">
-          <table>
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Description</th>
-                <th>Amount</th>
-                <th>Date</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${expenseRows || `
-                <tr><td colspan="4">Nta expense records ziraboneka.</td></tr>
-              `}
-            </tbody>
-          </table>
-        </div>
-      </main>
-
-      <style>
-        .finance-container {
-          max-width: 1100px;
-          margin: 25px auto;
-          padding: 16px;
-        }
-
-        .finance-cards {
-          display: grid;
-          grid-template-columns:
-            repeat(auto-fit, minmax(200px, 1fr));
-          gap: 16px;
-        }
-
-        .finance-card {
-          background: #effff4;
-          border: 1px solid #b7ebc6;
-          border-radius: 14px;
-          padding: 20px;
-          overflow-wrap: anywhere;
-        }
-
-        .finance-card h2 {
-          color: #087f46;
-        }
-
-        .finance-table {
-          overflow-x: auto;
-          margin-bottom: 28px;
-        }
-
-        table {
-          width: 100%;
-          min-width: 600px;
-          border-collapse: collapse;
-        }
-
-        th, td {
-          padding: 12px;
-          border-bottom: 1px solid #ddd;
-          text-align: left;
-        }
-
-        th {
-          background: #087f46;
-          color: white;
-        }
-      </style>
-    `));
+    return res.redirect('/admin/finances');
 
   } catch (error) {
-    console.error('MOONET finances error:', error);
+    console.error('Revenue record error:', error);
+    return res.status(500).send('Unable to record revenue.');
+  }
+});
 
-    res.status(500).send(
-      'Financial Dashboard ntiyafungutse. Reba server logs.'
-    );
+
+// Admin: record expense
+app.post('/admin/expenses', requireAdmin, (req, res) => {
+  const description = String(req.body.description || '').trim();
+  const amount = Number(req.body.amount);
+
+  if (
+    !description ||
+    description.length > 200 ||
+    !Number.isFinite(amount) ||
+    amount <= 0 ||
+    amount > 1_000_000_000
+  ) {
+    return res.status(400).send('Invalid expense details.');
+  }
+
+  try {
+    db.prepare(`
+      INSERT INTO expenses (description, amount, created_at)
+      VALUES (?, ?, datetime('now'))
+    `).run(description, amount);
+
+    return res.redirect('/admin/finances');
+
+  } catch (error) {
+    console.error('Expense record error:', error);
+    return res.status(500).send('Unable to record expense.');
   }
 });
 // ============================================
-// MOONET — PART 10B: SIGNED OFFERWALL URL
+// PART 10: ADMIN DASHBOARD AND WITHDRAWALS
 // ============================================
 
-app.get('/offers', requireLogin, (req, res) => {
-  try {
-    const publicKey = String(
-      process.env.OFFERWALL_PUBLIC_API_KEY || ''
-    ).trim();
 
-    const identitySecret = String(
-      process.env.OFFERWALL_IDENTITY_SECRET || ''
-    ).trim();
+// Admin dashboard
+app.get('/admin', requireAdmin, (req, res) => {
+  const userCount = db.prepare(`
+    SELECT COUNT(*) AS total
+    FROM users
+  `).get().total;
 
-    if (!publicKey || !identitySecret) {
-      return res.status(503).send(
-        pageLayout('Offers', `
-          <main style="max-width:700px;margin:30px auto;padding:20px">
-            <h1>🌙 MOONET Offers</h1>
-            <p>Offerwall ntirategurwa neza. Ongera ugerageze nyuma.</p>
-          </main>
-        `)
-      );
-    }
+  const videoCount = db.prepare(`
+    SELECT COUNT(*) AS total
+    FROM videos
+  `).get().total;
 
-    const userId = String(req.session.userId);
-    const expires = Math.floor(Date.now() / 1000) + 3600;
+  const pendingWithdrawals = db.prepare(`
+    SELECT COUNT(*) AS total
+    FROM withdrawals
+    WHERE LOWER(status) = 'pending'
+  `).get().total;
 
-    const message = [
-      'offerwall-user-v1',
-      publicKey,
-      userId,
-      String(expires)
-    ].join('\n');
+  const revenue = db.prepare(`
+    SELECT COALESCE(SUM(amount), 0) AS total
+    FROM revenue
+  `).get().total;
 
-    const signature = crypto
-      .createHmac('sha256', identitySecret)
-      .update(message)
-      .digest('hex');
+  const expenses = db.prepare(`
+    SELECT COALESCE(SUM(amount), 0) AS total
+    FROM expenses
+  `).get().total;
 
-    const offerUrl =
-      'https://offerwall.me/offerwall/' +
-      encodeURIComponent(publicKey) + '/' +
-      encodeURIComponent(userId) +
-      '?identityExpires=' + expires +
-      '&identitySignature=' + signature;
+  const body = `
+    <section class="card">
+      <h2>MOONET Admin Dashboard 🛡️</h2>
 
-    res.send(pageLayout('MOONET Offers', `
-      <main style="max-width:700px;margin:30px auto;padding:20px">
-        <h1>🌙 MOONET Offers</h1>
-        <p>Complete eligible offers to earn MOONS.</p>
+      <p>Total users: <strong>${Number(userCount)}</strong></p>
+      <p>Total videos: <strong>${Number(videoCount)}</strong></p>
+      <p>Pending withdrawals:
+        <strong>${Number(pendingWithdrawals)}</strong>
+      </p>
 
-        <a
-          href="${offerUrl}"
-          target="_blank"
-          rel="noopener noreferrer"
-          style="
-            display:inline-block;
-            background:#087f46;
-            color:white;
-            padding:14px 24px;
-            border-radius:10px;
-            text-decoration:none;
-            font-weight:bold
-          "
-        >
-          Open Offers
-        </a>
+      <p>Recorded revenue:
+        <strong>${escapeHtml(Number(revenue).toLocaleString('en-US'))}</strong>
+      </p>
 
-        <p style="margin-top:20px">
-          MOONS zizongerwa nyuma yo kwemezwa na offer provider.
-        </p>
-      </main>
-    `));
-  } catch (error) {
-    console.error('MOONET offers error:', error);
+      <p>Recorded expenses:
+        <strong>${escapeHtml(Number(expenses).toLocaleString('en-US'))}</strong>
+      </p>
 
-    res.status(500).send(
-      'Offers ntizashoboye gufunguka.'
-    );
-  }
+      <a class="button" href="/admin/users">Manage users</a>
+      <a class="button" href="/admin/withdrawals">Manage withdrawals</a>
+      <a class="button" href="/admin/finances">Financial records</a>
+    </section>
+  `;
+
+  return res.send(pageLayout('Admin Dashboard', body, req.user));
 });
-// ============================================
-// MOONET — PART 10C: OFFERWALL POSTBACK
-// ============================================
 
-app.get('/offerwall/callback', (req, res) => {
-  try {
-    const secret = String(
-      process.env.OFFERWALL_POSTBACK_SECRET || ''
-    ).trim();
 
-    if (!secret) {
-      console.error('Offerwall postback secret is missing.');
-      return res.status(503).send('not configured');
-    }
+// Admin: view users
+app.get('/admin/users', requireAdmin, (req, res) => {
+  const users = db.prepare(`
+    SELECT id, name, email, moon, created_at
+    FROM users
+    ORDER BY id DESC
+    LIMIT 200
+  `).all();
 
-    const {
-      subId,
-      transId,
-      reward,
-      signature,
-      status
-    } = req.query;
+  const rows = users.map((user) => `
+    <tr>
+      <td>${Number(user.id)}</td>
+      <td>${escapeHtml(user.name || '')}</td>
+      <td>${escapeHtml(user.email || '')}</td>
+      <td>${escapeHtml(formatMoons(user.moon))}</td>
+      <td>${escapeHtml(user.created_at || '')}</td>
+    </tr>
+  `).join('');
 
-    // 1. Validate required fields
+  const body = `
+    <section class="card">
+      <h2>Registered users</h2>
+
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse">
+          <thead>
+            <tr>
+              <th align="left">ID</th>
+              <th align="left">Name</th>
+              <th align="left">Email</th>
+              <th align="left">Balance</th>
+              <th align="left">Joined</th>
+            </tr>
+          </thead>
+          <tbody>${rows || '<tr><td colspan="5">No users found.</td></tr>'}</tbody>
+        </table>
+      </div>
+    </section>
+  `;
+
+  return res.send(pageLayout('Manage Users', body, req.user));
+});
+
+
+// Admin: view withdrawal requests
+app.get('/admin/withdrawals', requireAdmin, (req, res) => {
+  const withdrawals = db.prepare(`
+    SELECT
+      withdrawals.id,
+      withdrawals.user_id,
+      withdrawals.amount,
+      withdrawals.method,
+      withdrawals.status,
+      withdrawals.created_at,
+      users.name,
+      users.email
+    FROM withdrawals
+    LEFT JOIN users ON users.id = withdrawals.user_id
+    ORDER BY withdrawals.id DESC
+    LIMIT 200
+  `).all();
+
+  const rows = withdrawals.map((item) => {
+    const isPending =
+      String(item.status || '').toLowerCase() === 'pending';
+
+    return `
+      <tr>
+        <td>${Number(item.id)}</td>
+        <td>${escapeHtml(item.name || '')}</td>
+        <td>${escapeHtml(item.email || '')}</td>
+        <td>${escapeHtml(formatMoons(item.amount))}</td>
+        <td>${escapeHtml(item.method || '')}</td>
+        <td>${escapeHtml(item.status || '')}</td>
+        <td>
+          ${
+            isPending
+              ? `
+                <form method="POST"
+                  action="/admin/withdrawals/${Number(item.id)}/approve">
+                  <button type="submit">Approve</button>
+                </form>
+
+                <form method="POST"
+                  action="/admin/withdrawals/${Number(item.id)}/reject">
+                  <button type="submit">Reject and refund</button>
+                </form>
+              `
+              : 'Processed'
+          }
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  const body = `
+    <section class="card">
+      <h2>Withdrawal Requests</h2>
+
+      <p>
+        Approving a request records the decision only.
+        It does not send money automatically.
+      </p>
+
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse">
+          <thead>
+            <tr>
+              <th align="left">ID</th>
+              <th align="left">Name</th>
+              <th align="left">Email</th>
+              <th align="left">Amount</th>
+              <th align="left">Method</th>
+              <th align="left">Status</th>
+              <th align="left">Action</th>
+            </tr>
+          </thead>
+          <tbody>${rows || '<tr><td colspan="7">No withdrawals found.</td></tr>'}</tbody>
+        </table>
+      </div>
+    </section>
+  `;
+
+  return res.send(pageLayout('Manage Withdrawals', body, req.user));
+});
+
+
+// Admin: approve a pending withdrawal.
+// This records approval; it does not transfer money.
+app.post(
+  '/admin/withdrawals/:id/approve',
+  requireAdmin,
+  (req, res) => {
+    const withdrawalId = Number(req.params.id);
+
     if (
-      typeof subId !== 'string' ||
-      typeof transId !== 'string' ||
-      typeof reward !== 'string' ||
-      typeof signature !== 'string' ||
-      typeof status !== 'string'
+      !Number.isSafeInteger(withdrawalId) ||
+      withdrawalId <= 0
     ) {
-      return res.status(400).send('missing parameters');
+      return res.status(400).send('Invalid withdrawal ID.');
     }
 
-    // 2. Validate reward format
-    const rewardNumber = Number(reward);
+    try {
+      const result = db.prepare(`
+        UPDATE withdrawals
+        SET status = 'approved'
+        WHERE id = ?
+          AND LOWER(status) = 'pending'
+      `).run(withdrawalId);
 
-    if (
-      !Number.isFinite(rewardNumber) ||
-      rewardNumber <= 0 ||
-      !/^\d+$/.test(subId) ||
-      !/^[a-fA-F0-9-]{1,200}$/.test(transId)
-    ) {
-      return res.status(400).send('invalid parameters');
-    }
-
-    // 3. Verify provider signature:
-    // MD5(subId + transId + reward + secret)
-    const expectedSignature = crypto
-      .createHash('md5')
-      .update(subId + transId + reward + secret)
-      .digest('hex');
-
-    const supplied = Buffer.from(signature.toLowerCase(), 'utf8');
-    const expected = Buffer.from(expectedSignature, 'utf8');
-
-    if (
-      supplied.length !== expected.length ||
-      !crypto.timingSafeEqual(supplied, expected)
-    ) {
-      console.warn('Invalid Offerwall signature.');
-      return res.status(403).send('invalid signature');
-    }
-
-    // 4. Only known statuses are accepted
-    if (status !== '1' && status !== '2') {
-      return res.status(400).send('invalid status');
-    }
-
-    // 5. Find the MOONET user
-    const userId = Number(subId);
-
-    const user = db.prepare(`
-      SELECT id, moon
-      FROM users
-      WHERE id = ?
-    `).get(userId);
-
-    if (!user) {
-      return res.status(404).send('user not found');
-    }
-
-    /*
-      IMPORTANT:
-      Before enabling this route, confirm with Offerwall.me
-      whether "reward" represents MOONS or USD/publisher payout.
-
-      Do not credit a dollar amount directly as MOONS.
-      The conversion must match your Offerwall configuration.
-    */
-
-    if (status === '2') {
-      // Chargebacks require a separate, verified reversal flow.
-      // Do not silently treat a reversal as a new reward.
-      console.warn(
-        'Offerwall chargeback received; manual review required.',
-        transId
-      );
-
-      return res.status(200).send('ok');
-    }
-
-    // Reward conversion must be explicitly configured.
-    const moonsPerRewardUnit = Number(
-      process.env.OFFERWALL_MOONS_PER_REWARD_UNIT || '0'
-    );
-
-    if (
-      !Number.isFinite(moonsPerRewardUnit) ||
-      moonsPerRewardUnit <= 0
-    ) {
-      console.error('Offerwall reward conversion is not configured.');
-      return res.status(503).send('reward conversion not configured');
-    }
-
-    const moons = Math.floor(
-      rewardNumber * moonsPerRewardUnit
-    );
-
-    if (!Number.isSafeInteger(moons) || moons <= 0) {
-      return res.status(400).send('invalid converted reward');
-    }
-
-    // 6. Credit transactionally and prevent duplicate transactions.
-    runInTransaction(() => {
-      const alreadyProcessed = db.prepare(`
-        SELECT transaction_id
-        FROM offerwall_events
-        WHERE transaction_id = ?
-      `).get(transId);
-
-      if (alreadyProcessed) {
-        return;
+      if (Number(result.changes) !== 1) {
+        return res.status(409).send(
+          'Withdrawal not found or already processed.'
+        );
       }
 
-      db.prepare(`
-        INSERT INTO offerwall_events (
-          transaction_id,
-          user_id,
-          reward
-        ) VALUES (?, ?, ?)
-      `).run(transId, userId, moons);
+      return res.redirect('/admin/withdrawals');
+
+    } catch (error) {
+      console.error('Withdrawal approval error:', error);
+
+      return res.status(500).send(
+        'Unable to approve this withdrawal.'
+      );
+    }
+  }
+);
+
+
+// Admin: reject a pending withdrawal and refund the reserved MOONS.
+// This assumes the request route deducted MOONS when submitted.
+app.post(
+  '/admin/withdrawals/:id/reject',
+  requireAdmin,
+  (req, res) => {
+    const withdrawalId = Number(req.params.id);
+
+    if (
+      !Number.isSafeInteger(withdrawalId) ||
+      withdrawalId <= 0
+    ) {
+      return res.status(400).send('Invalid withdrawal ID.');
+    }
+
+    db.exec('BEGIN IMMEDIATE');
+
+    try {
+      const withdrawal = db.prepare(`
+        SELECT id, user_id, amount, status
+        FROM withdrawals
+        WHERE id = ?
+      `).get(withdrawalId);
+
+      if (
+        !withdrawal ||
+        String(withdrawal.status || '').toLowerCase() !== 'pending'
+      ) {
+        db.exec('ROLLBACK');
+
+        return res.status(409).send(
+          'Withdrawal not found or already processed.'
+        );
+      }
+
+      const refundAmount = Number(withdrawal.amount);
+
+      if (
+        !Number.isSafeInteger(refundAmount) ||
+        refundAmount <= 0
+      ) {
+        db.exec('ROLLBACK');
+
+        return res.status(400).send(
+          'Invalid withdrawal amount; manual review is required.'
+        );
+      }
+
+      const updateWithdrawal = db.prepare(`
+        UPDATE withdrawals
+        SET status = 'rejected'
+        WHERE id = ?
+          AND LOWER(status) = 'pending'
+      `).run(withdrawalId);
+
+      if (Number(updateWithdrawal.changes) !== 1) {
+        db.exec('ROLLBACK');
+
+        return res.status(409).send(
+          'Withdrawal was already processed.'
+        );
+      }
 
       db.prepare(`
         UPDATE users
         SET moon = moon + ?
         WHERE id = ?
-      `).run(moons, userId);
+      `).run(refundAmount, withdrawal.user_id);
 
       db.prepare(`
         INSERT INTO transactions (
           user_id,
           type,
-          moon,
-          description,
-          reference
-        ) VALUES (?, ?, ?, ?, ?)
-      `).run(
-        userId,
-        'offerwall_reward',
-        moons,
-        'Offerwall reward',
-        'offerwall:' + transId
-      );
-    });
+          amount,
+          status,
+          created_at
+        )
+        VALUES (?, 'withdrawal_refund', ?, 'completed', datetime('now'))
+      `).run(withdrawal.user_id, refundAmount);
 
-    return res.status(200).send('ok');
+      db.exec('COMMIT');
 
-  } catch (error) {
-    console.error('Offerwall callback error:', error);
-    return res.status(500).send('temporary error');
-  }
-});
-// ============================================
-// MOONET — PART 10D: OFFERWALL EVENT MIGRATION
-// ============================================
+      return res.redirect('/admin/withdrawals');
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS offerwall_event_status (
-    transaction_id TEXT PRIMARY KEY,
-    user_id INTEGER NOT NULL REFERENCES users(id),
-    reward_moon INTEGER NOT NULL CHECK(reward_moon > 0),
-    status TEXT NOT NULL
-      CHECK(status IN ('credited', 'reversed')),
-    credited_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    reversed_at TEXT
-  );
-`);
-// ============================================
-// MOONET — PART 10E: OFFERWALL RECONCILIATION
-// ============================================
+    } catch (error) {
+      try {
+        db.exec('ROLLBACK');
+      } catch (_) {
+        // Transaction may already be rolled back.
+      }
 
-// Admin-only report.
-// This route READS data; it does not change user balances.
+      console.error('Withdrawal rejection error:', error);
 
-app.get('/admin/offerwall-audit', requireAdmin, (req, res) => {
-  try {
-    const eventTableExists = db.prepare(`
-      SELECT name
-      FROM sqlite_master
-      WHERE type = 'table'
-        AND name = 'offerwall_events'
-    `).get();
-
-    if (!eventTableExists) {
-      return res.status(503).send(
-        'Offerwall events table is not configured.'
+      return res.status(500).send(
+        'Unable to reject this withdrawal safely.'
       );
     }
+  }
+);
+// ============================================
+// PART 11: HEALTH CHECK, ERROR HANDLING & STARTUP
+// ============================================
 
-    const totalEvents = db.prepare(`
-      SELECT COUNT(*) AS total
-      FROM offerwall_events
-    `).get().total;
+// Basic health check for Render.
+app.get('/health', (req, res) => {
+  try {
+    // Confirm that the database can execute a simple query.
+    db.prepare('SELECT 1 AS ok').get();
 
-    const totalRecordedRewards = db.prepare(`
-      SELECT COALESCE(SUM(reward), 0) AS total
-      FROM offerwall_events
-    `).get().total;
-
-    const recentEvents = db.prepare(`
-      SELECT
-        transaction_id,
-        user_id,
-        reward,
-        created_at
-      FROM offerwall_events
-      ORDER BY id DESC
-      LIMIT 100
-    `).all();
-
-    const escapeHtml = value =>
-      String(value ?? '').replace(/[&<>"']/g, ch => ({
-        '&': '&amp;',
-        '<': '&lt;',
-        '>': '&gt;',
-        '"': '&quot;',
-        "'": '&#39;'
-      })[ch]);
-
-    const rows = recentEvents.map(event => `
-      <tr>
-        <td>${escapeHtml(event.transaction_id)}</td>
-        <td>${escapeHtml(event.user_id)}</td>
-        <td>${escapeHtml(event.reward)}</td>
-        <td>${escapeHtml(event.created_at)}</td>
-      </tr>
-    `).join('');
-
-    res.send(pageLayout('Offerwall Audit', `
-      <main style="max-width:1000px;margin:25px auto;padding:16px">
-        <h1>🌙 MOONET Offerwall Audit</h1>
-
-        <section style="
-          background:#effff4;
-          border:1px solid #b7ebc6;
-          border-radius:12px;
-          padding:18px;
-          margin-bottom:20px
-        ">
-          <h3>Transactions recorded</h3>
-          <p>${escapeHtml(totalEvents)}</p>
-
-          <h3>Total recorded reward value</h3>
-          <p>${escapeHtml(totalRecordedRewards)}</p>
-        </section>
-
-        <h2>Recent Offerwall events</h2>
-
-        <div style="overflow-x:auto">
-          <table style="
-            width:100%;
-            border-collapse:collapse;
-            min-width:600px
-          ">
-            <thead>
-              <tr style="background:#087f46;color:white">
-                <th>Transaction ID</th>
-                <th>User ID</th>
-                <th>Recorded reward</th>
-                <th>Date</th>
-              </tr>
-            </thead>
-
-            <tbody>
-              ${rows || `
-                <tr>
-                  <td colspan="4">No events recorded yet.</td>
-                </tr>
-              `}
-            </tbody>
-          </table>
-        </div>
-
-        <p>
-          This report shows recorded events only.
-          It does not independently verify provider payments.
-        </p>
-      </main>
-
-      <style>
-        th, td {
-          padding:12px;
-          border-bottom:1px solid #ddd;
-          text-align:left;
-          overflow-wrap:anywhere;
-        }
-      </style>
-    `));
-
+    return res.status(200).json({
+      status: 'ok',
+      app: 'MOONET',
+      database: 'connected'
+    });
   } catch (error) {
-    console.error('MOONET Offerwall audit error:', error);
+    console.error('MOONET health check failed:', error);
 
-    res.status(500).send(
-      'Offerwall audit failed. Check server logs.'
-    );
+    return res.status(503).json({
+      status: 'error',
+      app: 'MOONET',
+      database: 'unavailable'
+    });
   }
 });
+
+
+// Handle unknown pages.
+app.use((req, res) => {
+  if (req.path.startsWith('/api/')) {
+    return res.status(404).json({
+      error: 'Endpoint not found'
+    });
+  }
+
+  return res.status(404).send(
+    pageLayout(
+      'Page not found',
+      `
+        <section class="card">
+          <h2>404 — Page not found</h2>
+          <p>The page you requested could not be found.</p>
+          <a class="button" href="/">Return home</a>
+        </section>
+      `,
+      currentUser(req)
+    )
+  );
+});
+
+
+// Central error handler.
+// Keep this after all application routes and the 404 handler.
+app.use((err, req, res, next) => {
+  console.error('MOONET application error:', err);
+
+  if (res.headersSent) {
+    return next(err);
+  }
+
+  if (req.path.startsWith('/api/')) {
+    return res.status(500).json({
+      error: 'An internal server error occurred'
+    });
+  }
+
+  return res.status(500).send(
+    pageLayout(
+      'Server error',
+      `
+        <section class="card">
+          <h2>Something went wrong</h2>
+          <p>Please try again later.</p>
+          <a class="button" href="/">Return home</a>
+        </section>
+      `,
+      currentUser(req)
+    )
+  );
+});
+
+
+// Start the server only once.
+const server = app.listen(PORT, '0.0.0.0', () => {
+  console.log(`MOONET is listening on port ${PORT}`);
+});
+
+// Graceful shutdown.
+function shutdown(signal) {
+  console.log(`${signal} received. Shutting down MOONET...`);
+
+  server.close(() => {
+    try {
+      db.close();
+      console.log('MOONET database connection closed.');
+      process.exit(0);
+    } catch (error) {
+      console.error('Database shutdown error:', error);
+      process.exit(1);
+    }
+  });
+
+  setTimeout(() => {
+    console.error('Shutdown timed out.');
+    process.exit(1);
+  }, 10000).unref();
+}
+
+process.once('SIGTERM', () => shutdown('SIGTERM'));
+process.once('SIGINT', () => shutdown('SIGINT'));
+// ============================================
+// MOONET - PART 12
+// Offerwall environment configuration check
+// ============================================
+
+const OFFERWALL_CONFIG = {
+  appId:
+    process.env.OFFERWALL_APP_ID ||
+    process.env.OFFERWALL_ID ||
+    '',
+
+  offerwallUrl:
+    process.env.OFFERWALL_URL || '',
+
+  rewardSecret:
+    process.env.OFFERWALL_REWARD_SECRET ||
+    process.env.OFFERWALL_SECRET ||
+    '',
+
+  moonsPerDollar: Number(
+    process.env.OFFERWALL_MOONS_PER_DOLLAR || 100
+  )
+};
+
+// Check configuration without exposing secrets.
+function getOfferwallConfigStatus() {
+  return {
+    appIdConfigured: Boolean(OFFERWALL_CONFIG.appId),
+    urlConfigured: Boolean(OFFERWALL_CONFIG.offerwallUrl),
+    rewardSecretConfigured: Boolean(
+      OFFERWALL_CONFIG.rewardSecret
+    ),
+    moonsPerDollar:
+      Number.isFinite(OFFERWALL_CONFIG.moonsPerDollar) &&
+      OFFERWALL_CONFIG.moonsPerDollar > 0
+        ? OFFERWALL_CONFIG.moonsPerDollar
+        : 100
+  };
+}
+
+// This function only checks configuration.
+// It does not award MOONS or modify the database.
+// ============================================
+// MOONET - PART 13
+// Offerwall configuration status
+// ============================================
+
+function getOfferwallStatus() {
+  const appId =
+    process.env.OFFERWALL_APP_ID ||
+    process.env.OFFERWALL_ID ||
+    '';
+
+  const offerwallUrl =
+    process.env.OFFERWALL_URL || '';
+
+  const rewardSecret =
+    process.env.OFFERWALL_REWARD_SECRET ||
+    process.env.OFFERWALL_SECRET ||
+    '';
+
+  const rawRate =
+    process.env.OFFERWALL_MOONS_PER_DOLLAR || '100';
+
+  const moonsPerDollar = Number(rawRate);
+
+  return {
+    configured: Boolean(appId && offerwallUrl),
+    appIdConfigured: Boolean(appId),
+    urlConfigured: Boolean(offerwallUrl),
+    rewardSecretConfigured: Boolean(rewardSecret),
+    moonsPerDollar:
+      Number.isFinite(moonsPerDollar) && moonsPerDollar > 0
+        ? moonsPerDollar
+        : 100
+  };
+    }
+// ============================================
+// MOONET - PART 14
+// Offerwall URL helper
+// ============================================
+
+function getOfferwallUrlForUser(userId) {
+  const baseUrl =
+    process.env.OFFERWALL_URL ||
+    '';
+
+  const appId =
+    process.env.OFFERWALL_APP_ID ||
+    process.env.OFFERWALL_ID ||
+    '';
+
+  if (!baseUrl) {
+    throw new Error('Offerwall URL is not configured.');
+  }
+
+  if (!userId) {
+    throw new Error('A valid user ID is required.');
+  }
+
+  const url = new URL(baseUrl);
+
+  // Only add app_id if your Offerwall provider requires it.
+  if (appId && !url.searchParams.has('app_id')) {
+    url.searchParams.set('app_id', appId);
+  }
+
+  // Do not guess the provider's user identifier parameter.
+  // Add it only after confirming the provider's documentation.
+
+  return url.toString();
+    }
