@@ -1,7 +1,5 @@
 'use strict';
-
 require('dotenv').config();
-
 const express = require('express');
 const session = require('express-session');
 const bcrypt = require('bcryptjs');
@@ -523,6 +521,8 @@ function pageLayout(title, body, user = null) {
   <a href="/">Home</a>
   <a href="/dashboard">Dashboard</a>
   <a href="/feed">Videos</a>
+<a href="/offers">Offers 🌙</a>
+<a href="/wallet">Wallet</a>
   <a href="/offers">Offers 🌙</a>
   <a href="/wallet">Wallet</a>
   <a href="/transactions">Transactions</a>
