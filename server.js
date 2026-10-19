@@ -540,7 +540,6 @@ function pageLayout(title, body, user = null) {
         <a href="/signup">Create account</a>
       </nav>
     `;
-
   return `
     <!DOCTYPE html>
     <html lang="en">
@@ -552,7 +551,6 @@ function pageLayout(title, body, user = null) {
         * {
           box-sizing: border-box;
         }
-
         body {
           margin: 0;
           padding: 20px;
@@ -560,7 +558,6 @@ function pageLayout(title, body, user = null) {
           background: #f5fff7;
           color: #183126;
         }
-
         main {
           max-width: 900px;
           margin: 25px auto;
@@ -569,12 +566,10 @@ function pageLayout(title, body, user = null) {
           border-radius: 16px;
           box-shadow: 0 4px 18px rgba(0,0,0,.07);
         }
-
         a {
           color: #168447;
           text-decoration: none;
         }
-
         input, button, select, textarea {
           width: 100%;
           padding: 12px;
@@ -583,7 +578,6 @@ function pageLayout(title, body, user = null) {
           border-radius: 8px;
           font-size: 16px;
         }
-
         button {
           background: #168447;
           color: white;
@@ -597,7 +591,6 @@ function pageLayout(title, body, user = null) {
           border: 1px solid #e0eee4;
           border-radius: 12px;
         }
-
         .muted {
           color: #617468;
         }
@@ -613,25 +606,6 @@ function pageLayout(title, body, user = null) {
     </html>
   `;
 }
-  <nav style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px">
-  <a href="/">Home</a>
-  <a href="/dashboard">Dashboard</a>
-  <a href="/feed">Videos</a>
-  <a href="/offers">Offers 🌙</a>
-      <nav style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px">
-        <a href="/">Home</a>
-        <a href="/dashboard">Dashboard</a>
-        <a href="/feed">Videos</a>
-        <a href="/offers">Offers 🌙</a>
-        <a href="/wallet">Wallet</a>
-        <a href="/transactions">Transactions</a>
-        <a href="/profile">Profile</a>
-        <form action="/logout" method="POST" style="display:inline">
-          <button type="submit">Logout</button>
-        </form>
-      </nav>
-    `
-    : `
       <nav style="display:flex;gap:12px;margin-bottom:20px">
         <a href="/">Home</a>
         <a href="/login">Login</a>
