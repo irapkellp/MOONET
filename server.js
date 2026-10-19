@@ -514,29 +514,15 @@ function requireAdmin(req, res, next) {
   next();
 }
 
-// Escape values before inserting them into HTML.
+// Escape values before inserting them return `
 function pageLayout(title, body, user = null) {
-    const nav = user
+  const nav = user
     ? `
       <nav style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px">
         <a href="/">Home</a>
         <a href="/dashboard">Dashboard</a>
         <a href="/feed">Videos</a>
         <a href="/offers">Offers 🌙</a>
-        <a href="/wallet">Wallet</a>
-        <a href="/transactions">Transactions</a>
-        <a href="/profile">Profile</a>
-        <form action="/logout" method="POST" style="display:inline">
-          <button type="submit">Logout</button>
-        </form>
-      </nav>
-    `
-    : '';
-    <nav style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20
-      <nav style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px">
-        <a href="/">Home</a>
-        <a href="/dashboard">Dashboard</a>
-        <a href="/feed">Videos</a>
         <a href="/wallet">Wallet</a>
         <a href="/transactions">Transactions</a>
         <a href="/profile">Profile</a>
@@ -552,7 +538,6 @@ function pageLayout(title, body, user = null) {
         <a href="/signup">Create account</a>
       </nav>
     `;
-
   return `
     <!DOCTYPE html>
     <html lang="en">
