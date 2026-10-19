@@ -516,11 +516,105 @@ function requireAdmin(req, res, next) {
 
 // Escape values before inserting them return `
 function pageLayout(title, body, user = null) {
-  // Escape values before inserting them into HTML.
+  //Escape values before inserting them into HTML.
 function pageLayout(title, body, user = null) {
   const nav = user
     ? `
       <nav style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px">
+        <a href="/">Home</a>
+        <a href="/dashboard">Dashboard</a>
+        <a href="/feed">Videos</a>
+        <a href="/offers">Offers 🌙</a>
+        <a href="/wallet">Wallet</a>
+        <a href="/transactions">Transactions</a>
+        <a href="/profile">Profile</a>
+        <form action="/logout" method="POST" style="display:inline">
+          <button type="submit">Logout</button>
+        </form>
+      </nav>
+    `
+    : `
+      <nav style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px">
+        <a href="/">Home</a>
+        <a href="/login">Login</a>
+        <a href="/signup">Create account</a>
+      </nav>
+    `;
+
+  return `
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>${escapeHtml(title)} - MOONET</title>
+      <style>
+        * {
+          box-sizing: border-box;
+        }
+
+        body {
+          margin: 0;
+          padding: 20px;
+          font-family: Arial, sans-serif;
+          background: #f5fff7;
+          color: #183126;
+        }
+
+        main {
+          max-width: 900px;
+          margin: 25px auto;
+          background: white;
+          padding: 24px;
+          border-radius: 16px;
+          box-shadow: 0 4px 18px rgba(0,0,0,.07);
+        }
+
+        a {
+          color: #168447;
+          text-decoration: none;
+        }
+
+        input, button, select, textarea {
+          width: 100%;
+          padding: 12px;
+          margin: 7px 0 14px;
+          border: 1px solid #d4e5d9;
+          border-radius: 8px;
+          font-size: 16px;
+        }
+
+        button {
+          background: #168447;
+          color: white;
+          border: 0;
+          cursor: pointer;
+        }
+
+        .card {
+          padding: 16px;
+          margin: 12px 0;
+          border: 1px solid #e0eee4;
+          border-radius: 12px;
+        }
+
+        .muted {
+          color: #617468;
+        }
+      </style>
+    </head>
+    <body>
+      <main>
+        <h1>🌙 MOONET</h1>
+        ${nav}
+        ${body}
+      </main>
+    </body>
+    </html>
+  `;
+  
+}
+    <nav style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px">
         <a href="/">Home</a>
         <a href="/dashboard">Dashboard</a>
         <a href="/feed">Videos</a>
